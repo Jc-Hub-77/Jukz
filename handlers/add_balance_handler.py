@@ -6,7 +6,6 @@ from decimal import Decimal, ROUND_UP
 
 from telebot import types
 
-# import bot # Removed to break circular import
 from modules.db_utils import (
     get_or_create_user, update_user_balance, record_transaction,
     update_transaction_status, get_pending_payment_by_transaction_id,
@@ -23,7 +22,7 @@ import sqlite3 # For specific exception handling
 
 logger = logging.getLogger(__name__)
 
-# @bot.bot.callback_query_handler(func=lambda call: call.data == 'main_add_balance') # Commented out to break circular import
+
 def handle_add_balance_callback(bot_instance, clear_user_state, get_user_state, update_user_state, call):
     user_id = call.from_user.id
     chat_id = call.message.chat.id
@@ -58,7 +57,6 @@ def handle_add_balance_callback(bot_instance, clear_user_state, get_user_state, 
         bot_instance.answer_callback_query(call.id)
 
 
-# @bot.bot.message_handler(func=lambda message: get_user_state(message.from_user.id, 'current_flow') == 'add_balance_awaiting_amount', content_types=['text']) # Commented out to break circular import
 def handle_amount_input_for_add_balance(bot_instance, clear_user_state, get_user_state, update_user_state, message):
     user_id = message.from_user.id
     chat_id = message.chat.id
@@ -130,7 +128,6 @@ def handle_amount_input_for_add_balance(bot_instance, clear_user_state, get_user
         update_user_state(user_id, 'current_flow', None) # Reset flow
 
 
-# @bot.bot.callback_query_handler(func=lambda call: call.data.startswith('pay_balance_')) # Commented out to break circular import
 def handle_pay_balance_crypto_callback(bot_instance, clear_user_state, get_user_state, update_user_state, call):
     user_id = call.from_user.id
     chat_id = call.message.chat.id
@@ -307,7 +304,6 @@ def handle_pay_balance_crypto_callback(bot_instance, clear_user_state, get_user_
     update_user_state(user_id, 'current_flow', 'add_balance_awaiting_hd_payment_confirmation')
 
 
-# @bot.callback_query_handler(func=lambda call: call.data.startswith('check_bal_payment_')) # Commented out to break circular import
 def handle_check_add_balance_payment_callback(bot_instance, clear_user_state, get_user_state, update_user_state, call):
     user_id = call.from_user.id
     chat_id = call.message.chat.id
@@ -416,7 +412,6 @@ def handle_check_add_balance_payment_callback(bot_instance, clear_user_state, ge
         bot_instance.answer_callback_query(call.id, "An error occurred while checking payment status. Please try again.", show_alert=True)
 
 
-# @bot.callback_query_handler(func=lambda call: call.data.startswith('cancel_bal_payment_')) # Commented out to break circular import
 def handle_cancel_add_balance_payment_callback(bot_instance, clear_user_state, get_user_state, update_user_state, call):
     user_id = call.from_user.id
     chat_id = call.message.chat.id

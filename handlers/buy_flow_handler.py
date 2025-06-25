@@ -1,6 +1,5 @@
 import telebot
 from telebot import types
-# from bot import bot, get_user_state, update_user_state, clear_user_state # Added clear_user_state # Removed to break circular import
 import json
 import time
 import logging # Added logging
@@ -31,7 +30,7 @@ from handlers.main_menu_handler import get_main_menu_text_and_markup # For fallb
 
 logger = logging.getLogger(__name__)
 
-# @bot.callback_query_handler(func=lambda call: call.data == 'buy_initiate') # Commented out to break circular import
+
 def handle_buy_initiate_callback(bot_instance, clear_user_state, get_user_state, update_user_state, call):
     logger.info(f"handle_buy_initiate_callback called for user {call.from_user.id}")
     user_id = call.from_user.id
@@ -108,7 +107,6 @@ def handle_buy_initiate_callback(bot_instance, clear_user_state, get_user_state,
             logger.error(f"Error sending fallback message in handle_buy_initiate_callback to user {user_id}: {e_fallback}")
 
 
-# @bot.callback_query_handler(func=lambda call: call.data.startswith('select_city_')) # Commented out to break circular import
 def handle_city_selection_callback(bot_instance, clear_user_state, get_user_state, update_user_state, call):
     user_id = call.from_user.id
     chat_id = call.message.chat.id
@@ -119,7 +117,7 @@ def handle_city_selection_callback(bot_instance, clear_user_state, get_user_stat
         city_name = call.data.split('select_city_', 1)[1]
     except IndexError:
         logger.warning(f"Invalid callback data for city selection: {call.data} by user {user_id}")
-        bot.answer_callback_query(call.id, "Error processing city selection. Please try again.", show_alert=True)
+        bot_instance.answer_callback_query(call.id, "Error processing city selection. Please try again.", show_alert=True)
         return
 
     update_user_state(user_id, 'buy_selected_city', city_name)
@@ -142,7 +140,7 @@ def handle_city_selection_callback(bot_instance, clear_user_state, get_user_stat
     markup.add(types.InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="back_to_main"))
 
     sent_message_id = send_or_edit_message(
-        bot=bot,
+        bot=bot_instance,
         chat_id=chat_id,
         text=prompt_text,
         reply_markup=markup,
@@ -153,9 +151,9 @@ def handle_city_selection_callback(bot_instance, clear_user_state, get_user_stat
     if sent_message_id:
         update_user_state(user_id, 'last_bot_message_id', sent_message_id)
 
-    bot.answer_callback_query(call.id)
+    bot_instance.answer_callback_query(call.id)
 
-# @bot.callback_query_handler(func=lambda call: call.data.startswith('select_item_')) # Commented out to break circular import
+
 def handle_item_selection_callback(bot_instance, clear_user_state, get_user_state, update_user_state, call):
     user_id = call.from_user.id
     chat_id = call.message.chat.id
@@ -167,7 +165,7 @@ def handle_item_selection_callback(bot_instance, clear_user_state, get_user_stat
         product_id = int(product_id_str)
     except (IndexError, ValueError):
         logger.warning(f"Invalid product ID in callback data: {call.data} for user {user_id}")
-        bot.answer_callback_query(call.id, "Error: Invalid item ID.", show_alert=True)
+        bot_instance.answer_callback_query(call.id, "Error: Invalid item ID.", show_alert=True)
         return
 
     update_user_state(user_id, 'buy_selected_product_id', product_id)
@@ -182,8 +180,8 @@ def handle_item_selection_callback(bot_instance, clear_user_state, get_user_stat
         cb_data_back = f"select_city_{selected_city_for_back}" if selected_city_for_back else "buy_initiate"
         markup.add(types.InlineKeyboardButton("⬅️ Back to Item List", callback_data=cb_data_back))
         markup.add(types.InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="back_to_main"))
-        send_or_edit_message(bot, chat_id, error_text, reply_markup=markup, existing_message_id=existing_message_id, parse_mode="MarkdownV2")
-        bot.answer_callback_query(call.id, "Product unavailable.")
+        send_or_edit_message(bot_instance, chat_id, error_text, reply_markup=markup, existing_message_id=existing_message_id, parse_mode="MarkdownV2")
+        bot_instance.answer_callback_query(call.id, "Product unavailable.")
         return
 
     item_display_details = file_system_utils.get_item_details(product_db_data['city'], product_db_data['name'])
@@ -196,8 +194,8 @@ def handle_item_selection_callback(bot_instance, clear_user_state, get_user_stat
         cb_data_back_item = f"select_city_{selected_city}" if selected_city else "buy_initiate"
         markup.add(types.InlineKeyboardButton("⬅️ Back to Item List", callback_data=cb_data_back_item))
         markup.add(types.InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="back_to_main"))
-        send_or_edit_message(bot, chat_id, error_text, reply_markup=markup, existing_message_id=existing_message_id, parse_mode="MarkdownV2")
-        bot.answer_callback_query(call.id, "Item details missing.")
+        send_or_edit_message(bot_instance, chat_id, error_text, reply_markup=markup, existing_message_id=existing_message_id, parse_mode="MarkdownV2")
+        bot_instance.answer_callback_query(call.id, "Item details missing.")
         return
 
     user_data = get_or_create_user(user_id)
@@ -224,10 +222,10 @@ def handle_item_selection_callback(bot_instance, clear_user_state, get_user_stat
         actual_instance_path = item_display_details.get('actual_instance_path')
         if not actual_instance_path:
             logger.critical(f"No actual_instance_path for product ID {product_id} during balance purchase for user {user_id}.")
-            bot.send_message(chat_id, "Purchase successful, but there's an issue with item delivery. Please contact support with your User ID and transaction details.", parse_mode="MarkdownV2")
+            bot_instance.send_message(chat_id, "Purchase successful, but there's an issue with item delivery. Please contact support with your User ID and transaction details.", parse_mode="MarkdownV2")
             record_transaction(user_id=user_id, product_id=product_id, charge_id=None, type='purchase_balance', eur_amount=float(total_cost), payment_status='completed_fulfillment_error', notes=f"Paid from balance. CRITICAL: Instance path missing for product type {product_type_folder_name}")
             clear_user_state(user_id)
-            bot.answer_callback_query(call.id, "Purchase complete, item error.")
+            bot_instance.answer_callback_query(call.id, "Purchase complete, item error.")
             return
 
         instance_folder_name = os.path.basename(actual_instance_path)
@@ -251,22 +249,22 @@ def handle_item_selection_callback(bot_instance, clear_user_state, get_user_stat
         markup_main_menu = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="back_to_main"))
 
         if existing_message_id:
-            try: delete_message(bot, chat_id, existing_message_id)
+            try: delete_message(bot_instance, chat_id, existing_message_id)
             except Exception as e_del: logger.warning(f"Notice: Failed to delete message {existing_message_id} in balance purchase for user {user_id}: {e_del}")
 
-        sent_msg = bot.send_message(chat_id, success_message, reply_markup=markup_main_menu, parse_mode="MarkdownV2")
+        sent_msg = bot_instance.send_message(chat_id, success_message, reply_markup=markup_main_menu, parse_mode="MarkdownV2")
 
         image_paths_delivery = item_display_details.get('image_paths', [])
         if image_paths_delivery and os.path.exists(image_paths_delivery[0]):
             try:
                 with open(image_paths_delivery[0], 'rb') as photo_file:
-                    bot.send_photo(chat_id, photo=photo_file, caption="Your purchased item image.")
+                    bot_instance.send_photo(chat_id, photo=photo_file, caption="Your purchased item image.")
             except Exception as e_photo:
                 logger.error(f"Error sending delivery photo for product {product_id} (User {user_id}): {e_photo}")
 
         clear_user_state(user_id)
         update_user_state(user_id, 'last_bot_message_id', sent_msg.message_id)
-        bot.answer_callback_query(call.id, "Purchase successful!")
+        bot_instance.answer_callback_query(call.id, "Purchase successful!")
         return
 
     paid_from_balance = Decimal('0.0')
@@ -281,9 +279,9 @@ def handle_item_selection_callback(bot_instance, clear_user_state, get_user_stat
 
     if amount_to_pay_externally == Decimal('0.0') and total_cost > Decimal('0.0') : # Should not happen if logic above is correct
         logger.error(f"LOGIC ERROR: amount_to_pay_externally is 0 but balance was less than total_cost. User: {user_id}, Balance: {user_balance}, Total: {total_cost}")
-        bot.send_message(chat_id, "There was an issue calculating payment. Please try again or contact support.")
+        bot_instance.send_message(chat_id, "There was an issue calculating payment. Please try again or contact support.")
         clear_user_state(user_id) # Clear potentially corrupted state
-        bot.answer_callback_query(call.id, "Calculation error.")
+        bot_instance.answer_callback_query(call.id, "Calculation error.")
         return
 
     update_user_state(user_id, 'buy_amount_due_eur', float(amount_to_pay_externally))
@@ -331,26 +329,26 @@ def handle_item_selection_callback(bot_instance, clear_user_state, get_user_stat
     if first_image_path:
         if current_msg_is_photo and existing_message_id == call.message.message_id : # Current message is a photo, edit caption
             try:
-                bot.edit_message_caption(caption=final_caption, chat_id=chat_id, message_id=existing_message_id, reply_markup=markup, parse_mode="MarkdownV2")
+                bot_instance.edit_message_caption(caption=final_caption, chat_id=chat_id, message_id=existing_message_id, reply_markup=markup, parse_mode="MarkdownV2")
                 sent_message_id_val = existing_message_id
             except Exception as e_caption:
                 logger.warning(f"Error editing caption for item {product_id}, user {user_id}: {e_caption}. Deleting and resending photo.")
-                if existing_message_id: delete_message(bot, chat_id, existing_message_id)
+                if existing_message_id: delete_message(bot_instance, chat_id, existing_message_id)
                 with open(first_image_path, 'rb') as photo_file:
-                    new_msg = bot.send_photo(chat_id, photo=photo_file, caption=final_caption, reply_markup=markup, parse_mode="MarkdownV2")
+                    new_msg = bot_instance.send_photo(chat_id, photo=photo_file, caption=final_caption, reply_markup=markup, parse_mode="MarkdownV2")
                     sent_message_id_val = new_msg.message_id
         else: # Not a photo or different message, send new photo
-            if existing_message_id: delete_message(bot, chat_id, existing_message_id) # Delete old message (text or different photo)
+            if existing_message_id: delete_message(bot_instance, chat_id, existing_message_id) # Delete old message (text or different photo)
             with open(first_image_path, 'rb') as photo_file:
-                new_msg = bot.send_photo(chat_id, photo=photo_file, caption=final_caption, reply_markup=markup, parse_mode="MarkdownV2")
+                new_msg = bot_instance.send_photo(chat_id, photo=photo_file, caption=final_caption, reply_markup=markup, parse_mode="MarkdownV2")
                 sent_message_id_val = new_msg.message_id
     else: # No image for item, send/edit text message
         if current_msg_is_photo and existing_message_id == call.message.message_id : # If old was photo, delete it
-            if existing_message_id: delete_message(bot, chat_id, existing_message_id)
+            if existing_message_id: delete_message(bot_instance, chat_id, existing_message_id)
             existing_message_id = None # Force send_or_edit_message to send new text message
 
         sent_message_id_val = send_or_edit_message(
-            bot, chat_id, final_caption,
+            bot_instance, chat_id, final_caption,
             reply_markup=markup,
             existing_message_id=existing_message_id,
             parse_mode="MarkdownV2"
@@ -359,9 +357,9 @@ def handle_item_selection_callback(bot_instance, clear_user_state, get_user_stat
     if sent_message_id_val:
         update_user_state(user_id, 'last_bot_message_id', sent_message_id_val)
 
-    bot.answer_callback_query(call.id)
+    bot_instance.answer_callback_query(call.id)
 
-# @bot.callback_query_handler(func=lambda call: call.data.startswith('pay_buy_')) # Commented out to break circular import
+
 def handle_pay_buy_crypto_callback(bot_instance, clear_user_state, get_user_state, update_user_state, call):
     user_id = call.from_user.id
     chat_id = call.message.chat.id
@@ -374,7 +372,7 @@ def handle_pay_buy_crypto_callback(bot_instance, clear_user_state, get_user_stat
         logger.info(f"User {user_id} selected crypto {crypto_currency} for buying item (HD Wallet flow).")
     except IndexError:
         logger.warning(f"Invalid callback data for pay_buy: {call.data} by user {user_id}")
-        bot.answer_callback_query(call.id, "Error processing your selection.", show_alert=True)
+        bot_instance.answer_callback_query(call.id, "Error processing your selection.", show_alert=True)
         return
 
     product_id = get_user_state(user_id, 'buy_selected_product_id')
@@ -387,25 +385,25 @@ def handle_pay_buy_crypto_callback(bot_instance, clear_user_state, get_user_stat
         error_text = "Your session seems to have expired or critical information is missing. Please restart the purchase."
         markup_error = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="back_to_main"))
         if original_message_id:
-            send_or_edit_message(bot, chat_id, error_text, reply_markup=markup_error, existing_message_id=original_message_id, parse_mode="MarkdownV2")
+            send_or_edit_message(bot_instance, chat_id, error_text, reply_markup=markup_error, existing_message_id=original_message_id, parse_mode="MarkdownV2")
         else:
-            bot.send_message(chat_id, error_text, reply_markup=markup_error, parse_mode="MarkdownV2")
+            bot_instance.send_message(chat_id, error_text, reply_markup=markup_error, parse_mode="MarkdownV2")
         clear_user_state(user_id)
-        bot.answer_callback_query(call.id, "Session error. Please restart.", show_alert=True)
+        bot_instance.answer_callback_query(call.id, "Session error. Please restart.", show_alert=True)
         return
 
     product_db_data = get_product_details_by_id(product_id)
     if not product_db_data:
         logger.error(f"Product details not found for product_id {product_id} during pay_buy_crypto (HD Wallet) for user {user_id}.")
-        send_or_edit_message(bot, chat_id, "Error: Product details could not be fetched. Please try selecting the item again.", existing_message_id=original_message_id)
-        bot.answer_callback_query(call.id, "Product data error.")
+        send_or_edit_message(bot_instance, chat_id, "Error: Product details could not be fetched. Please try selecting the item again.", existing_message_id=original_message_id)
+        bot_instance.answer_callback_query(call.id, "Product data error.")
         return
 
-    bot.answer_callback_query(call.id) # Acknowledge button press early
+    bot_instance.answer_callback_query(call.id) # Acknowledge button press early
     if original_message_id:
-        ack_msg = send_or_edit_message(bot, chat_id, "⏳ Generating your payment address...", existing_message_id=original_message_id, reply_markup=None)
+        ack_msg = send_or_edit_message(bot_instance, chat_id, "⏳ Generating your payment address...", existing_message_id=original_message_id, reply_markup=None)
     else:
-        ack_msg = bot.send_message(chat_id, "⏳ Generating your payment address...")
+        ack_msg = bot_instance.send_message(chat_id, "⏳ Generating your payment address...")
     current_message_id_for_invoice = ack_msg.message_id if ack_msg else original_message_id
 
 
@@ -420,7 +418,7 @@ def handle_pay_buy_crypto_callback(bot_instance, clear_user_state, get_user_stat
     )
     if not main_transaction_id:
         logger.error(f"HD Wallet: Failed to create transaction record for user {user_id}, product {product_id}.")
-        send_or_edit_message(bot, chat_id, "Database error creating transaction. Please try again.", existing_message_id=current_message_id_for_invoice)
+        send_or_edit_message(bot_instance, chat_id, "Database error creating transaction. Please try again.", existing_message_id=current_message_id_for_invoice)
         return
     update_user_state(user_id, 'buy_transaction_id', main_transaction_id)
 
@@ -438,21 +436,21 @@ def handle_pay_buy_crypto_callback(bot_instance, clear_user_state, get_user_stat
         next_idx = get_next_address_index(coin_symbol_for_hd_wallet)
     except Exception as e_idx:
         logger.exception(f"HD Wallet: Error getting next address index for {coin_symbol_for_hd_wallet} (user {user_id}, tx {main_transaction_id}): {e_idx}")
-        send_or_edit_message(bot, chat_id, "Error generating payment address (index). Please try again later or contact support.", existing_message_id=current_message_id_for_invoice)
+        send_or_edit_message(bot_instance, chat_id, "Error generating payment address (index). Please try again later or contact support.", existing_message_id=current_message_id_for_invoice)
         update_transaction_status(main_transaction_id, 'error_address_generation')
         return
 
     unique_address = hd_wallet_utils.generate_address(coin_symbol_for_hd_wallet, next_idx)
     if not unique_address:
         logger.error(f"HD Wallet: Failed to generate address for {coin_symbol_for_hd_wallet}, index {next_idx} (user {user_id}, tx {main_transaction_id}).")
-        send_or_edit_message(bot, chat_id, "Error generating payment address (HD). Please try again later or contact support.", existing_message_id=current_message_id_for_invoice)
+        send_or_edit_message(bot_instance, chat_id, "Error generating payment address (HD). Please try again later or contact support.", existing_message_id=current_message_id_for_invoice)
         update_transaction_status(main_transaction_id, 'error_address_generation')
         return
 
     rate = exchange_rate_utils.get_current_exchange_rate("EUR", display_coin_symbol)
     if not rate:
         logger.error(f"HD Wallet: Could not get exchange rate for EUR to {display_coin_symbol} (user {user_id}, tx {main_transaction_id}).")
-        send_or_edit_message(bot, chat_id, f"Could not retrieve exchange rate for {escape_md(display_coin_symbol)}. Please try again or contact support.", existing_message_id=current_message_id_for_invoice, parse_mode='MarkdownV2')
+        send_or_edit_message(bot_instance, chat_id, f"Could not retrieve exchange rate for {escape_md(display_coin_symbol)}. Please try again or contact support.", existing_message_id=current_message_id_for_invoice, parse_mode='MarkdownV2')
         update_transaction_status(main_transaction_id, 'error_exchange_rate')
         return
 
@@ -474,7 +472,7 @@ def handle_pay_buy_crypto_callback(bot_instance, clear_user_state, get_user_stat
     )
     if not update_success:
         logger.error(f"HD Wallet: Failed to update main transaction {main_transaction_id} for user {user_id} (buy flow).")
-        send_or_edit_message(bot, chat_id, "Database error updating transaction. Please try again.", existing_message_id=current_message_id_for_invoice)
+        send_or_edit_message(bot_instance, chat_id, "Database error updating transaction. Please try again.", existing_message_id=current_message_id_for_invoice)
         return
 
     db_coin_symbol_for_pending = "USDT_TRX" if crypto_currency == "USDT" else display_coin_symbol
@@ -491,7 +489,7 @@ def handle_pay_buy_crypto_callback(bot_instance, clear_user_state, get_user_stat
     if not pending_payment_id:
        logger.error(f"HD Wallet: Failed to create pending_crypto_payment for main_tx {main_transaction_id} (user {user_id}, buy flow).")
        update_transaction_status(main_transaction_id, 'error_creating_pending_payment')
-       send_or_edit_message(bot, chat_id, "Error preparing payment record. Please try again or contact support.", existing_message_id=current_message_id_for_invoice)
+       send_or_edit_message(bot_instance, chat_id, "Error preparing payment record. Please try again or contact support.", existing_message_id=current_message_id_for_invoice)
        return
 
     qr_code_path = None
@@ -525,37 +523,36 @@ def handle_pay_buy_crypto_callback(bot_instance, clear_user_state, get_user_stat
     markup_invoice.add(types.InlineKeyboardButton("⬅️ Change Payment Method", callback_data=f"select_item_{product_id}"))
 
     if current_message_id_for_invoice: # This was the "Generating address..." message
-        try: delete_message(bot, chat_id, current_message_id_for_invoice)
+        try: delete_message(bot_instance, chat_id, current_message_id_for_invoice)
         except Exception: pass
 
     sent_invoice_msg = None
     if qr_code_path and os.path.exists(qr_code_path):
         try:
             with open(qr_code_path, 'rb') as qr_photo:
-                sent_invoice_msg = bot.send_photo(chat_id, photo=qr_photo, caption=invoice_text_md, reply_markup=markup_invoice, parse_mode="MarkdownV2")
+                sent_invoice_msg = bot_instance.send_photo(chat_id, photo=qr_photo, caption=invoice_text_md, reply_markup=markup_invoice, parse_mode="MarkdownV2")
         except Exception as e_qr:
             logger.error(f"Failed to send QR photo for buy item {main_transaction_id}: {e_qr}")
-            sent_invoice_msg = bot.send_message(chat_id, invoice_text_md, reply_markup=markup_invoice, parse_mode="MarkdownV2")
+            sent_invoice_msg = bot_instance.send_message(chat_id, invoice_text_md, reply_markup=markup_invoice, parse_mode="MarkdownV2")
         finally:
             if os.path.exists(qr_code_path):
                 try: os.remove(qr_code_path)
                 except Exception as e_rm: logger.error(f"Failed to remove QR code {qr_code_path}: {e_rm}")
     else:
         logger.warning(f"HD Wallet (buy): QR code not generated or not found for {unique_address} (user {user_id}, tx {main_transaction_id}). Sending text invoice.")
-        sent_invoice_msg = bot.send_message(chat_id, invoice_text_md, reply_markup=markup_invoice, parse_mode="MarkdownV2")
+        sent_invoice_msg = bot_instance.send_message(chat_id, invoice_text_md, reply_markup=markup_invoice, parse_mode="MarkdownV2")
 
     if sent_invoice_msg:
         update_user_state(user_id, 'last_bot_message_id', sent_invoice_msg.message_id)
     update_user_state(user_id, 'current_flow', 'buy_awaiting_hd_payment_confirmation')
 
 
-# @bot.callback_query_handler(func=lambda call: call.data.startswith('check_buy_payment_')) # Commented out to break circular import
 def handle_buy_check_payment_callback(bot_instance, clear_user_state, get_user_state, update_user_state, call):
     user_id = call.from_user.id
     chat_id = call.message.chat.id
     original_invoice_message_id = get_user_state(user_id, 'last_bot_message_id') or call.message.message_id
     logger.info(f"User {user_id} checking buy payment status for callback: {call.data}")
-    bot_instance = bot
+    # bot_instance is already passed as an argument, no need to reassign from a global 'bot'
 
     try:
         transaction_id_str = call.data.split('check_buy_payment_')[1]
@@ -660,13 +657,12 @@ def handle_buy_check_payment_callback(bot_instance, clear_user_state, get_user_s
         bot_instance.answer_callback_query(call.id, "An error occurred while checking payment status. Please try again.", show_alert=True)
 
 
-# @bot.callback_query_handler(func=lambda call: call.data.startswith('cancel_buy_payment_')) # Commented out to break circular import
 def handle_cancel_buy_payment_callback(bot_instance, clear_user_state, get_user_state, update_user_state, call):
     user_id = call.from_user.id
     chat_id = call.message.chat.id
     original_invoice_message_id = get_user_state(user_id, 'last_bot_message_id') or call.message.message_id
     logger.info(f"User {user_id} initiated cancel for buy payment: {call.data}")
-    bot_instance = bot
+    # bot_instance is already passed as an argument
 
     try:
         transaction_id_str = call.data.split('cancel_buy_payment_')[1]
