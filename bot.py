@@ -51,26 +51,12 @@ else:
 
 # Import handlers
 logger.info("Importing handlers...")
-from handlers.main_menu_handler import handle_start, handle_back_to_main_menu_callback
-from handlers.buy_flow_handler import (
-    handle_buy_initiate_callback, handle_city_selection_callback,
-    handle_item_selection_callback, handle_pay_buy_crypto_callback,
-    handle_buy_check_payment_callback, handle_cancel_buy_payment_callback
-)
-from handlers.add_balance_handler import (
-    handle_add_balance_callback, handle_amount_input_for_add_balance,
-    handle_pay_balance_crypto_callback, handle_check_add_balance_payment_callback,
-    handle_cancel_add_balance_payment_callback
-)
-from handlers.account_handler import (
-    handle_account_callback, handle_view_full_history_callback # Will be created in account_handler.py
-)
-from handlers.support_handler import (
-    handle_support_initiate_callback, handle_support_message,
-    handle_user_close_ticket_callback
-)
-# admin_handler is also imported but its handlers are typically for admin commands, not main user flow.
-from handlers import admin_handler
+from handlers import main_menu_handler
+from handlers import buy_flow_handler
+from handlers import add_balance_handler
+from handlers import account_handler
+from handlers import support_handler
+from handlers import admin_handler # admin_handler is also imported
 
 logger.info("Handlers imported.")
 
@@ -80,11 +66,11 @@ logger.info("Registering handlers...")
 # --- Main Menu and Navigation ---
 @bot.message_handler(commands=['start'])
 def start_command_wrapper(message):
-    handle_start(bot, clear_user_state, get_user_state, update_user_state, message)
+    main_menu_handler.handle_start(bot, clear_user_state, get_user_state, update_user_state, message)
 
 @bot.callback_query_handler(func=lambda call: call.data == 'back_to_main')
 def back_to_main_callback_wrapper(call):
-    handle_back_to_main_menu_callback(bot, clear_user_state, get_user_state, update_user_state, call)
+    main_menu_handler.handle_back_to_main_menu_callback(bot, clear_user_state, get_user_state, update_user_state, call)
 
 # --- Buy Flow Handlers ---
 @bot.callback_query_handler(func=lambda call: call.data == 'buy_initiate')
@@ -115,23 +101,23 @@ def cancel_buy_payment_callback_wrapper(call):
 # --- Add Balance Flow Handlers ---
 @bot.callback_query_handler(func=lambda call: call.data == 'main_add_balance')
 def add_balance_callback_wrapper(call):
-    handle_add_balance_callback(bot, clear_user_state, get_user_state, update_user_state, call)
+    add_balance_handler.handle_add_balance_callback(bot, clear_user_state, get_user_state, update_user_state, call)
 
 @bot.message_handler(func=lambda message: get_user_state(message.from_user.id, 'current_flow') == 'add_balance_awaiting_amount', content_types=['text'])
 def amount_input_for_add_balance_wrapper(message):
-    handle_amount_input_for_add_balance(bot, clear_user_state, get_user_state, update_user_state, message)
+    add_balance_handler.handle_amount_input_for_add_balance(bot, clear_user_state, get_user_state, update_user_state, message)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('pay_balance_'))
 def pay_balance_crypto_callback_wrapper(call):
-    handle_pay_balance_crypto_callback(bot, clear_user_state, get_user_state, update_user_state, call)
+    add_balance_handler.handle_pay_balance_crypto_callback(bot, clear_user_state, get_user_state, update_user_state, call)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('check_bal_payment_'))
 def check_add_balance_payment_callback_wrapper(call):
-    handle_check_add_balance_payment_callback(bot, clear_user_state, get_user_state, update_user_state, call)
+    add_balance_handler.handle_check_add_balance_payment_callback(bot, clear_user_state, get_user_state, update_user_state, call)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('cancel_bal_payment_'))
 def cancel_add_balance_payment_callback_wrapper(call):
-    handle_cancel_add_balance_payment_callback(bot, clear_user_state, get_user_state, update_user_state, call)
+    add_balance_handler.handle_cancel_add_balance_payment_callback(bot, clear_user_state, get_user_state, update_user_state, call)
 
 
 # --- Account Flow Handlers ---
