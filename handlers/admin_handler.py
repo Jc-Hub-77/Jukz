@@ -50,8 +50,10 @@ def format_ticket_summary_for_list(ticket):
         f"Snippet: {first_message_snippet}"
     )
 
-@bot.message_handler(commands=['tickets'], func=is_admin)
-def handle_admin_list_tickets_command(message, page=1):
+# Note: Removed @bot decorators from all ticket and user management handlers below.
+# They will need to be registered in bot.py and accept bot_instance, state utils.
+
+def handle_admin_list_tickets_command(bot_instance, clear_user_state_fn, get_user_state_fn, update_user_state_fn, message, page=1):
     admin_id = message.from_user.id
     chat_id = message.chat.id
     logger.info(f"Admin {admin_id} listing tickets, page {page}.")
@@ -59,33 +61,38 @@ def handle_admin_list_tickets_command(message, page=1):
     open_tickets = get_all_open_tickets_admin()
 
     if not open_tickets:
-        bot.send_message(chat_id, "No open support tickets.")
+        bot_instance.send_message(chat_id, "No open support tickets.")
         return
 
     total_tickets = len(open_tickets)
     total_pages = (total_tickets + TICKETS_PER_PAGE - 1) // TICKETS_PER_PAGE
-    page = max(1, min(page, total_pages))
+    page = max(1, min(page, total_pages)) # Ensure page is valid
     start_index = (page - 1) * TICKETS_PER_PAGE
     end_index = start_index + TICKETS_PER_PAGE
     tickets_to_display = open_tickets[start_index:end_index]
 
-    old_pagination_msg_id = get_user_state(admin_id, 'admin_ticket_list_pagination_msg_id')
+    # Message Management: Delete previous pagination message if any
+    old_pagination_msg_id = get_user_state_fn(admin_id, 'admin_ticket_list_pagination_msg_id')
     if old_pagination_msg_id:
-        try: delete_message(bot, chat_id, old_pagination_msg_id)
+        try: delete_message(bot_instance, chat_id, old_pagination_msg_id)
         except Exception: pass
-        update_user_state(admin_id, 'admin_ticket_list_pagination_msg_id', None)
+        update_user_state_fn(admin_id, 'admin_ticket_list_pagination_msg_id', None)
 
+    # Delete the command message itself
     if hasattr(message, 'text') and message.text and message.text.startswith('/tickets'):
-        try: delete_message(bot, chat_id, message.message_id)
+        try: delete_message(bot_instance, chat_id, message.message_id)
         except Exception: pass
 
-
+    # Send a new header for the ticket list
     header_text = f"📋 *Open Support Tickets (Page {page}/{total_pages}):*\n"
-    bot.send_message(chat_id, header_text, parse_mode="MarkdownV2")
+    # This message should ideally be editable if this function is called again for new page.
+    # For now, let's send it. If pagination is via editing, this needs adjustment.
+    # The current structure sends new messages for each ticket item, then a pagination message.
+    # This is probably fine.
+    bot_instance.send_message(chat_id, header_text, parse_mode="MarkdownV2")
 
-
-    if not tickets_to_display and page > 1:
-        bot.send_message(chat_id, "No tickets on this page. This is unexpected.")
+    if not tickets_to_display and page > 1: # Should not happen if page is clamped correctly
+        bot_instance.send_message(chat_id, "No tickets on this page. This is unexpected.")
 
     for ticket in tickets_to_display:
         summary = format_ticket_summary_for_list(ticket)
@@ -94,61 +101,60 @@ def handle_admin_list_tickets_command(message, page=1):
             types.InlineKeyboardButton(f"👁️ View/Reply #{ticket['ticket_id']}", callback_data=f"admin_view_ticket_{ticket['ticket_id']}"),
             types.InlineKeyboardButton(f"❌ Close #{ticket['ticket_id']}", callback_data=f"admin_close_ticket_{ticket['ticket_id']}")
         )
-        bot.send_message(chat_id, summary + "\n--------------------", reply_markup=ticket_markup, parse_mode="MarkdownV2")
+        bot_instance.send_message(chat_id, summary + "\n--------------------", reply_markup=ticket_markup, parse_mode="MarkdownV2")
 
     if total_pages > 1:
         pagination_markup = types.InlineKeyboardMarkup(row_width=3)
         nav_buttons = []
         if page > 1: nav_buttons.append(types.InlineKeyboardButton("⬅️ Previous", callback_data=f"admin_list_tickets_page_{page-1}"))
-        nav_buttons.append(types.InlineKeyboardButton(f"🔄 Pg {page}/{total_pages}", callback_data=f"admin_list_tickets_page_{page}"))
+        nav_buttons.append(types.InlineKeyboardButton(f"🔄 Pg {page}/{total_pages}", callback_data=f"admin_list_tickets_page_{page}")) # Refresh current
         if page < total_pages: nav_buttons.append(types.InlineKeyboardButton("Next ➡️", callback_data=f"admin_list_tickets_page_{page+1}"))
 
         if nav_buttons:
             pagination_markup.add(*nav_buttons)
-            pg_msg = bot.send_message(chat_id, "Ticket List Navigation:", reply_markup=pagination_markup)
-            update_user_state(admin_id, 'admin_ticket_list_pagination_msg_id', pg_msg.message_id)
+            pg_msg = bot_instance.send_message(chat_id, "Ticket List Navigation:", reply_markup=pagination_markup)
+            update_user_state_fn(admin_id, 'admin_ticket_list_pagination_msg_id', pg_msg.message_id)
 
-    update_user_state(admin_id, 'admin_ticket_current_page', page)
+    update_user_state_fn(admin_id, 'admin_ticket_current_page', page)
 
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('admin_list_tickets_page_') and is_admin(call))
-def handle_admin_list_tickets_page_callback(call):
+def handle_admin_list_tickets_page_callback(bot_instance, clear_user_state_fn, get_user_state_fn, update_user_state_fn, call):
     try: page = int(call.data.split('admin_list_tickets_page_')[1])
     except (IndexError, ValueError):
-        bot.answer_callback_query(call.id, "Invalid page.", show_alert=True); return
+        bot_instance.answer_callback_query(call.id, "Invalid page.", show_alert=True); return
 
-    try: delete_message(bot, call.message.chat.id, call.message.message_id)
+    # Delete the pagination message that was clicked
+    try: delete_message(bot_instance, call.message.chat.id, call.message.message_id)
     except: pass
 
-    mock_message = telebot.types.Message(
-        message_id=0,
+    # Create a mock message to pass to the command handler
+    mock_message = types.Message(
+        message_id=0, # This message won't be deleted by the handler as it's not a command
         from_user=call.from_user,
-        date=datetime.datetime.now().timestamp(),
-        chat=call.message.chat,
+        date=int(datetime.datetime.now().timestamp()), # Ensure it's an int
+        chat=call.message.chat, # Use chat object from callback
         content_type='text',
         options={},
         json_string=""
     )
-    mock_message.text = None
+    mock_message.text = None # Not a command text
 
-    handle_admin_list_tickets_command(mock_message, page=page)
-    bot.answer_callback_query(call.id)
+    handle_admin_list_tickets_command(bot_instance, clear_user_state_fn, get_user_state_fn, update_user_state_fn, mock_message, page=page)
+    bot_instance.answer_callback_query(call.id)
 
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('admin_view_ticket_') and is_admin(call))
-def handle_admin_view_ticket_callback(call):
+def handle_admin_view_ticket_callback(bot_instance, clear_user_state_fn, get_user_state_fn, update_user_state_fn, call):
     admin_id = call.from_user.id
     chat_id = call.message.chat.id
     try: ticket_id = int(call.data.split('admin_view_ticket_')[1])
-    except (IndexError, ValueError): bot.answer_callback_query(call.id, "Bad Ticket ID.", show_alert=True); return
+    except (IndexError, ValueError): bot_instance.answer_callback_query(call.id, "Bad Ticket ID.", show_alert=True); return
 
     ticket = db_utils.get_ticket_details_by_id(ticket_id)
     if not ticket:
-        bot.answer_callback_query(call.id, f"Ticket #{ticket_id} not found."); return
+        bot_instance.answer_callback_query(call.id, f"Ticket #{ticket_id} not found."); return
 
-    update_user_state(admin_id, 'admin_current_ticket_id', ticket_id)
-    update_user_state(admin_id, 'admin_flow', 'viewing_ticket')
-
+    update_user_state_fn(admin_id, 'admin_current_ticket_id', ticket_id)
+    update_user_state_fn(admin_id, 'admin_flow', 'viewing_ticket') # For reply context
 
     messages_list = json.loads(ticket['messages_json']) if ticket['messages_json'] else []
     conversation_history = [f"📜 *Conversation for Ticket \\#{ticket_id}* (User ID: `{ticket['user_id']}`)"]
@@ -174,81 +180,89 @@ def handle_admin_view_ticket_callback(call):
     )
     markup.add(types.InlineKeyboardButton("⬅️ Back to Tickets List", callback_data="admin_list_tickets_cmd_from_view"))
 
-    try: delete_message(bot, chat_id, call.message.message_id)
+    # Delete the message that contained the button for THIS ticket (the list item)
+    try: delete_message(bot_instance, chat_id, call.message.message_id)
     except: pass
 
-    sent_msg = bot.send_message(chat_id, full_conversation_text, reply_markup=markup, parse_mode="MarkdownV2")
-    update_user_state(admin_id, 'admin_ticket_view_msg_id', sent_msg.message_id)
-    bot.answer_callback_query(call.id)
+    # Send new message for the ticket view
+    sent_msg = bot_instance.send_message(chat_id, full_conversation_text, reply_markup=markup, parse_mode="MarkdownV2")
+    update_user_state_fn(admin_id, 'admin_ticket_view_msg_id', sent_msg.message_id) # Store ID of this view message
+    bot_instance.answer_callback_query(call.id)
 
-@bot.callback_query_handler(func=lambda call: call.data == 'admin_list_tickets_cmd_from_view' and is_admin(call))
-def handle_admin_list_tickets_cmd_from_view_callback(call):
+def handle_admin_list_tickets_cmd_from_view_callback(bot_instance, clear_user_state_fn, get_user_state_fn, update_user_state_fn, call):
     admin_id = call.from_user.id
-    current_page = get_user_state(admin_id, 'admin_ticket_current_page', 1)
-    try: delete_message(bot, call.message.chat.id, call.message.message_id)
-    except: pass
+    current_page = get_user_state_fn(admin_id, 'admin_ticket_current_page', 1)
 
-    mock_message = telebot.types.Message(0,call.from_user,datetime.datetime.now().timestamp(),call.message.chat,'text',{},"")
-    mock_message.text = None
-    handle_admin_list_tickets_command(mock_message, page=current_page)
-    bot.answer_callback_query(call.id)
+    # Delete the ticket view message
+    ticket_view_msg_id = get_user_state_fn(admin_id, 'admin_ticket_view_msg_id')
+    if ticket_view_msg_id and ticket_view_msg_id == call.message.message_id:
+        try: delete_message(bot_instance, call.message.chat.id, ticket_view_msg_id)
+        except: pass
+        update_user_state_fn(admin_id, 'admin_ticket_view_msg_id', None)
+    elif call.message.message_id : # Fallback if state ID doesn't match current message
+        try: delete_message(bot_instance, call.message.chat.id, call.message.message_id)
+        except: pass
+
+    mock_message = types.Message(0,call.from_user,int(datetime.datetime.now().timestamp()),call.message.chat,'text',{},"")
+    mock_message.text = None # Indicates not a direct command input
+    handle_admin_list_tickets_command(bot_instance, clear_user_state_fn, get_user_state_fn, update_user_state_fn, mock_message, page=current_page)
+    bot_instance.answer_callback_query(call.id)
 
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('admin_reply_ticket_') and is_admin(call))
-def handle_admin_initiate_reply_callback(call):
+def handle_admin_initiate_reply_callback(bot_instance, clear_user_state_fn, get_user_state_fn, update_user_state_fn, call):
     admin_id = call.from_user.id
     chat_id = call.message.chat.id
     try: ticket_id = int(call.data.split('admin_reply_ticket_')[1])
-    except (IndexError, ValueError): bot.answer_callback_query(call.id, "Bad Ticket ID.", show_alert=True); return
+    except (IndexError, ValueError): bot_instance.answer_callback_query(call.id, "Bad Ticket ID.", show_alert=True); return
 
     ticket = db_utils.get_ticket_details_by_id(ticket_id)
     if not ticket or ticket['status'] != 'open':
-        bot.answer_callback_query(call.id, f"Ticket #{ticket_id} not found or not open."); return
+        bot_instance.answer_callback_query(call.id, f"Ticket #{ticket_id} not found or not open."); return
 
-    update_user_state(admin_id, 'admin_replying_to_ticket_id', ticket_id)
-    update_user_state(admin_id, 'admin_replying_to_user_id', ticket['user_id'])
-    update_user_state(admin_id, 'admin_flow', 'awaiting_admin_reply_text')
+    update_user_state_fn(admin_id, 'admin_replying_to_ticket_id', ticket_id)
+    update_user_state_fn(admin_id, 'admin_replying_to_user_id', ticket['user_id'])
+    update_user_state_fn(admin_id, 'admin_flow', 'awaiting_admin_reply_text')
 
-    ticket_view_msg_id = get_user_state(admin_id, 'admin_ticket_view_msg_id')
-    if ticket_view_msg_id:
-        try: delete_message(bot, chat_id, ticket_view_msg_id)
+    # Delete the ticket view message
+    ticket_view_msg_id = get_user_state_fn(admin_id, 'admin_ticket_view_msg_id')
+    if ticket_view_msg_id and ticket_view_msg_id == call.message.message_id:
+        try: delete_message(bot_instance, chat_id, ticket_view_msg_id)
         except: pass
-        update_user_state(admin_id, 'admin_ticket_view_msg_id', None)
-    elif call.message.message_id:
-        try: delete_message(bot, chat_id, call.message.message_id)
-        except: pass
-
+        update_user_state_fn(admin_id, 'admin_ticket_view_msg_id', None)
+    elif call.message.message_id: # Fallback for safety
+         try: delete_message(bot_instance, chat_id, call.message.message_id)
+         except: pass
 
     reply_prompt_text = f"✍️ Replying to Ticket \\#{ticket_id} \\(User ID: `{ticket['user_id']}`\\)\\.\nSend your reply message now\\. Type /cancel\\_admin\\_action to abort\\."
-    pm = bot.send_message(chat_id, reply_prompt_text, parse_mode="MarkdownV2", reply_markup=types.ForceReply(selective=True))
-    update_user_state(admin_id, 'admin_reply_prompt_msg_id', pm.message_id)
-    bot.answer_callback_query(call.id, f"Ready for reply to Ticket #{ticket_id}")
+    pm = bot_instance.send_message(chat_id, reply_prompt_text, parse_mode="MarkdownV2", reply_markup=types.ForceReply(selective=True))
+    update_user_state_fn(admin_id, 'admin_reply_prompt_msg_id', pm.message_id)
+    bot_instance.answer_callback_query(call.id, f"Ready for reply to Ticket #{ticket_id}")
 
 
-@bot.message_handler(func=lambda message: str(message.from_user.id) == str(config.ADMIN_ID) and \
-                       get_user_state(message.from_user.id, 'admin_flow') == 'awaiting_admin_reply_text',
-                     content_types=['text', 'photo'])
-def handle_admin_ticket_reply_message_content(message):
+def handle_admin_ticket_reply_message_content(bot_instance, clear_user_state_fn, get_user_state_fn, update_user_state_fn, message):
     admin_id = message.from_user.id
     chat_id = message.chat.id
-    ticket_id = get_user_state(admin_id, 'admin_replying_to_ticket_id')
-    target_user_id = get_user_state(admin_id, 'admin_replying_to_user_id')
+    ticket_id = get_user_state_fn(admin_id, 'admin_replying_to_ticket_id')
+    target_user_id = get_user_state_fn(admin_id, 'admin_replying_to_user_id')
 
-    prompt_id = get_user_state(admin_id, 'admin_reply_prompt_msg_id')
+    prompt_id = get_user_state_fn(admin_id, 'admin_reply_prompt_msg_id')
     if prompt_id:
-        try: delete_message(bot, chat_id, prompt_id)
+        try: delete_message(bot_instance, chat_id, prompt_id)
         except: pass
-        update_user_state(admin_id, 'admin_reply_prompt_msg_id', None)
+        update_user_state_fn(admin_id, 'admin_reply_prompt_msg_id', None)
+
+    # Delete admin's reply message itself
+    try: delete_message(bot_instance, chat_id, message.message_id)
+    except: pass
 
     if message.text and message.text.lower() == '/cancel_admin_action':
-        try: delete_message(bot, chat_id, message.message_id)
-        except: pass
-        clear_user_state(admin_id)
-        bot.send_message(chat_id, "Reply cancelled.")
+        clear_user_state_fn(admin_id) # Clear flow and ticket context
+        bot_instance.send_message(chat_id, "Reply cancelled.")
         return
 
     if not ticket_id or not target_user_id:
-        bot.reply_to(message, "Error: No ticket context for reply. Please start over."); return
+        bot_instance.send_message(chat_id, "Error: No ticket context for reply. Please start over.") # Use send_message as reply_to might fail if original msg deleted
+        return
 
     admin_reply_text = message.text or message.caption or ""
     photo_file_id = message.photo[-1].file_id if message.photo else None
@@ -256,93 +270,95 @@ def handle_admin_ticket_reply_message_content(message):
     if photo_file_id: message_content_for_db += f" [Admin Image Attached: {photo_file_id}]"
 
     if not message_content_for_db.strip():
-        bot.reply_to(message, "Reply seems empty. Please try again or /cancel_admin_action."); return
+        # Re-prompt if reply is empty, or handle as error
+        bot_instance.send_message(chat_id, "Reply seems empty. Please try again or /cancel_admin_action.")
+        # Optionally re-send the ForceReply prompt here if desired.
+        return
 
     add_success = db_utils.add_message_to_ticket(ticket_id, 'admin', message_content_for_db, admin_tg_message_id=message.message_id)
     if add_success:
-        bot.send_message(admin_id, f"✅ Reply sent for Ticket \\#{ticket_id}\\.", parse_mode="MarkdownV2")
+        bot_instance.send_message(admin_id, f"✅ Reply sent for Ticket \\#{ticket_id}\\.", parse_mode="MarkdownV2")
         user_notification_text = f"💬 Admin has replied to your Ticket \\#`{ticket_id}`:\n\n{escape_md(admin_reply_text)}"
         try:
-            if photo_file_id: bot.send_photo(target_user_id, photo_file_id, caption=user_notification_text, parse_mode="MarkdownV2")
-            else: bot.send_message(target_user_id, user_notification_text, parse_mode="MarkdownV2")
+            if photo_file_id: bot_instance.send_photo(target_user_id, photo_file_id, caption=user_notification_text, parse_mode="MarkdownV2")
+            else: bot_instance.send_message(target_user_id, user_notification_text, parse_mode="MarkdownV2")
         except Exception as e_user_notify:
             logger.error(f"Failed to send admin reply for ticket {ticket_id} to user {target_user_id}: {e_user_notify}")
-            bot.send_message(admin_id, f"⚠️ Failed to deliver your reply to user {target_user_id} for Ticket \\#{ticket_id}\\. Error: {escape_md(str(e_user_notify))}", parse_mode="MarkdownV2")
+            bot_instance.send_message(admin_id, f"⚠️ Failed to deliver your reply to user {target_user_id} for Ticket \\#{ticket_id}\\. Error: {escape_md(str(e_user_notify))}", parse_mode="MarkdownV2")
     else:
-        bot.send_message(admin_id, f"⚠️ Error saving reply for Ticket \\#{ticket_id}\\.", parse_mode="MarkdownV2")
+        bot_instance.send_message(admin_id, f"⚠️ Error saving reply for Ticket \\#{ticket_id}\\.", parse_mode="MarkdownV2")
 
-    try: delete_message(bot, chat_id, message.message_id)
-    except: pass
-    clear_user_state(admin_id)
+    clear_user_state_fn(admin_id) # Clear flow and ticket context after reply
 
-@bot.message_handler(commands=['cancel_admin_action'], func=is_admin)
-def handle_general_cancel_admin_action(message):
+def handle_general_cancel_admin_action(bot_instance, clear_user_state_fn, get_user_state_fn, update_user_state_fn, message):
     admin_id = message.from_user.id
     chat_id = message.chat.id
 
+    # Extended list of potential prompt message IDs stored in user state
     prompt_ids_keys = [
-        'admin_reply_prompt_msg_id', 'add_item_prompt_msg_id',
-        'add_item_confirm_msg_id', 'admin_ticket_view_msg_id',
-        'admin_edit_item_prompt_msg_id', 'admin_edit_item_generic_prompt_id',
-        'admin_edit_item_menu_msg_id', 'admin_delete_item_confirm_msg_id',
-        'admin_adjust_balance_prompt_msg_id', 'admin_adjust_balance_reason_prompt_msg_id',
-        'admin_adjust_balance_confirm_msg_id', 'admin_view_user_details_msg_id'
+        'admin_reply_prompt_msg_id', 'admin_ticket_list_pagination_msg_id',
+        'admin_ticket_view_msg_id',
+        'admin_last_prompt_msg_id', # From item addition
+        'admin_user_list_main_msg_id', 'admin_view_user_details_msg_id'
+        # Add any other state keys that store message IDs for admin prompts
     ]
     for key in prompt_ids_keys:
-        prompt_id = get_user_state(admin_id, key)
+        prompt_id = get_user_state_fn(admin_id, key)
         if prompt_id:
-            try: delete_message(bot, chat_id, prompt_id)
+            try: delete_message(bot_instance, chat_id, prompt_id)
             except: pass
 
-    clear_user_state(admin_id)
-    bot.send_message(chat_id, "Your current admin action has been cancelled.")
-    try: delete_message(bot, chat_id, message.message_id)
+    # Delete the /cancel_admin_action message itself
+    try: delete_message(bot_instance, chat_id, message.message_id)
     except: pass
 
+    clear_user_state_fn(admin_id) # Clears all flow specific data for the admin
+    bot_instance.send_message(chat_id, "Your current admin action has been cancelled.")
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('admin_close_ticket_') and is_admin(call))
-def handle_admin_close_ticket_callback(call):
+
+def handle_admin_close_ticket_callback(bot_instance, clear_user_state_fn, get_user_state_fn, update_user_state_fn, call):
     admin_id = call.from_user.id
     chat_id = call.message.chat.id
     try: ticket_id = int(call.data.split('admin_close_ticket_')[1])
-    except (IndexError, ValueError): bot.answer_callback_query(call.id, "Bad Ticket ID.", show_alert=True); return
+    except (IndexError, ValueError): bot_instance.answer_callback_query(call.id, "Bad Ticket ID.", show_alert=True); return
 
     ticket = db_utils.get_ticket_details_by_id(ticket_id)
-    if not ticket: bot.answer_callback_query(call.id, f"Ticket #{ticket_id} not found."); return
+    if not ticket: bot_instance.answer_callback_query(call.id, f"Ticket #{ticket_id} not found."); return
+
+    current_ticket_view_msg_id = get_user_state_fn(admin_id, 'admin_ticket_view_msg_id')
 
     if ticket['status'] != 'open':
-        bot.answer_callback_query(call.id, f"Ticket #{ticket_id} is already {ticket['status']}.")
-        ticket_view_msg_id = get_user_state(admin_id, 'admin_ticket_view_msg_id')
-        if ticket_view_msg_id == call.message.message_id:
+        bot_instance.answer_callback_query(call.id, f"Ticket #{ticket_id} is already {ticket['status']}.")
+        if current_ticket_view_msg_id == call.message.message_id : # If the message is the one showing this button
             closed_text = f"Ticket \\#`{ticket_id}` is already *{escape_md(ticket['status'].replace('_', ' '))}*\\."
             markup = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("⬅️ Back to Tickets List", callback_data="admin_list_tickets_cmd_from_view"))
-            send_or_edit_message(bot, chat_id, closed_text, existing_message_id=ticket_view_msg_id, reply_markup=markup, parse_mode="MarkdownV2")
+            # Edit the existing message to reflect it's already closed and update buttons
+            send_or_edit_message(bot_instance, chat_id, closed_text, existing_message_id=current_ticket_view_msg_id, reply_markup=markup, parse_mode="MarkdownV2")
         return
 
     updated = db_utils.update_ticket_status(ticket_id, 'closed_by_admin')
     if updated:
-        bot.answer_callback_query(call.id, f"Ticket #{ticket_id} closed.")
-
-        ticket_view_msg_id = get_user_state(admin_id, 'admin_ticket_view_msg_id')
+        bot_instance.answer_callback_query(call.id, f"Ticket #{ticket_id} closed.")
         closed_text = f"Ticket \\#`{ticket_id}` is now *closed\\_by\\_admin*\\."
         markup = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("⬅️ Back to Tickets List", callback_data="admin_list_tickets_cmd_from_view"))
 
-        if ticket_view_msg_id and str(get_user_state(admin_id, 'admin_current_ticket_id')) == str(ticket_id) and call.message.message_id == ticket_view_msg_id:
-             send_or_edit_message(bot, chat_id, closed_text, existing_message_id=ticket_view_msg_id, reply_markup=markup, parse_mode="MarkdownV2")
-        else:
-            try: delete_message(bot, chat_id, call.message.message_id)
+        # If this callback came from the ticket view message, edit it. Otherwise, delete old and send new.
+        if current_ticket_view_msg_id and str(get_user_state_fn(admin_id, 'admin_current_ticket_id')) == str(ticket_id) and call.message.message_id == current_ticket_view_msg_id:
+             send_or_edit_message(bot_instance, chat_id, closed_text, existing_message_id=current_ticket_view_msg_id, reply_markup=markup, parse_mode="MarkdownV2")
+             update_user_state_fn(admin_id, 'admin_ticket_view_msg_id', None) # Clear as it's now "Back to list"
+        else: # Came from list view or other context
+            try: delete_message(bot_instance, chat_id, call.message.message_id) # Delete the list item message
             except: pass
-            bot.send_message(chat_id, closed_text, parse_mode="MarkdownV2")
+            bot_instance.send_message(chat_id, closed_text, parse_mode="MarkdownV2", reply_markup=markup) # Send new confirmation with back to list
 
-
-        try: bot.send_message(ticket['user_id'], f"ℹ️ Your Support Ticket \\#`{ticket_id}` has been closed by an administrator\\.", parse_mode="MarkdownV2")
+        try: bot_instance.send_message(ticket['user_id'], f"ℹ️ Your Support Ticket \\#`{ticket_id}` has been closed by an administrator\\.", parse_mode="MarkdownV2")
         except Exception as e_notify: logger.error(f"Failed to notify user {ticket['user_id']} of ticket {ticket_id} closure: {e_notify}")
     else:
-        bot.answer_callback_query(call.id, f"Error closing ticket \\#{ticket_id}\\.", show_alert=True)
+        bot_instance.answer_callback_query(call.id, f"Error closing ticket \\#{ticket_id}\\.", show_alert=True)
 
-    if str(get_user_state(admin_id, 'admin_current_ticket_id')) == str(ticket_id):
-        update_user_state(admin_id, 'admin_current_ticket_id', None)
-        update_user_state(admin_id, 'admin_flow', None)
+    if str(get_user_state_fn(admin_id, 'admin_current_ticket_id')) == str(ticket_id):
+        update_user_state_fn(admin_id, 'admin_current_ticket_id', None)
+        update_user_state_fn(admin_id, 'admin_flow', None)
 
 # --- Admin Item Addition Flow (Filesystem Based) ---
 
