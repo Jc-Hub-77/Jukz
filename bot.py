@@ -224,15 +224,65 @@ def admin_add_item_images_wrapper(message):
     admin_handler.handle_admin_add_item_images_input(bot, clear_user_state, get_user_state, update_user_state, message)
 
 
-# Other Admin handlers (like ticket management) would be registered here too.
-# Example from existing admin_handler (needs to be adapted if they were using @bot decorators before):
-# @bot.message_handler(commands=['tickets'], func=lambda message: admin_handler.is_admin(message.from_user.id))
-# def admin_list_tickets_wrapper(message):
-#     admin_handler.handle_admin_list_tickets_command(bot, clear_user_state, get_user_state, update_user_state, message) # Assuming signature matches
+# --- Admin Ticket Management Handlers ---
+@bot.message_handler(commands=['tickets'], func=lambda message: admin_handler.is_admin(message.from_user.id))
+def admin_list_tickets_wrapper(message):
+    # Assuming handle_admin_list_tickets_command is updated to accept bot_instance and state utils
+    admin_handler.handle_admin_list_tickets_command(bot, clear_user_state, get_user_state, update_user_state, message)
 
-# It's important that admin_handler.py defines its own checking for admin_id for security.
-# For now, we assume admin_handler.py will handle its own decorators or provide functions to be wrapped here if necessary.
-# This part might need more specific registrations based on admin_handler.py's structure.
+@bot.callback_query_handler(func=lambda call: call.data.startswith('admin_list_tickets_page_') and admin_handler.is_admin(call.from_user.id))
+def admin_list_tickets_page_wrapper(call):
+    admin_handler.handle_admin_list_tickets_page_callback(bot, clear_user_state, get_user_state, update_user_state, call)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('admin_view_ticket_') and admin_handler.is_admin(call.from_user.id))
+def admin_view_ticket_wrapper(call):
+    admin_handler.handle_admin_view_ticket_callback(bot, clear_user_state, get_user_state, update_user_state, call)
+
+@bot.callback_query_handler(func=lambda call: call.data == 'admin_list_tickets_cmd_from_view' and admin_handler.is_admin(call.from_user.id))
+def admin_list_tickets_cmd_from_view_wrapper(call):
+    admin_handler.handle_admin_list_tickets_cmd_from_view_callback(bot, clear_user_state, get_user_state, update_user_state, call)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('admin_reply_ticket_') and admin_handler.is_admin(call.from_user.id))
+def admin_initiate_reply_wrapper(call):
+    admin_handler.handle_admin_initiate_reply_callback(bot, clear_user_state, get_user_state, update_user_state, call)
+
+@bot.message_handler(
+    func=lambda message: admin_handler.is_admin(message.from_user.id) and \
+                         get_user_state(message.from_user.id, 'admin_flow') == 'awaiting_admin_reply_text',
+    content_types=['text', 'photo']
+)
+def admin_ticket_reply_message_wrapper(message):
+    admin_handler.handle_admin_ticket_reply_message_content(bot, clear_user_state, get_user_state, update_user_state, message)
+
+@bot.message_handler(commands=['cancel_admin_action'], func=lambda message: admin_handler.is_admin(message.from_user.id))
+def admin_cancel_action_wrapper(message):
+    admin_handler.handle_general_cancel_admin_action(bot, clear_user_state, get_user_state, update_user_state, message)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('admin_close_ticket_') and admin_handler.is_admin(call.from_user.id))
+def admin_close_ticket_wrapper(call):
+    admin_handler.handle_admin_close_ticket_callback(bot, clear_user_state, get_user_state, update_user_state, call)
+
+
+# --- Admin User Management Handlers ---
+@bot.message_handler(commands=['viewusers'], func=lambda message: admin_handler.is_admin(message.from_user.id))
+def admin_view_users_wrapper(message):
+    admin_handler.command_view_users(bot, clear_user_state, get_user_state, update_user_state, message)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('admin_users_page_') and admin_handler.is_admin(call.from_user.id))
+def admin_users_page_wrapper(call):
+    admin_handler.callback_view_users_page(bot, clear_user_state, get_user_state, update_user_state, call)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('admin_view_user_details_') and admin_handler.is_admin(call.from_user.id))
+def admin_view_user_details_wrapper(call):
+    admin_handler.handle_admin_view_user_details_callback(bot, clear_user_state, get_user_state, update_user_state, call)
+
+@bot.callback_query_handler(func=lambda call: call.data == 'admin_back_to_user_list' and admin_handler.is_admin(call.from_user.id))
+def admin_back_to_user_list_wrapper(call):
+    admin_handler.handle_admin_back_to_user_list_callback(bot, clear_user_state, get_user_state, update_user_state, call)
+
+# Note: Admin adjust balance flow is not explicitly in the plan but exists in admin_handler.
+# If it's to be kept, it also needs its decorators removed and registration here.
+# For now, focusing on what was in the plan / explicitly mentioned as problematic.
 
 
 # Custom update listener to log all incoming updates
