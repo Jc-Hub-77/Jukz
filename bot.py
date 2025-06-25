@@ -157,15 +157,78 @@ def user_close_ticket_callback_wrapper(call):
     support_handler.handle_user_close_ticket_callback(bot, clear_user_state, get_user_state, update_user_state, call)
 
 # --- Admin Handlers ---
-# These are typically command-based or specific callback data for admin actions
-# Example:
-# @bot.message_handler(commands=['admin_stats'], func=lambda message: admin_handler.is_admin(message.from_user.id))
-# def admin_stats_wrapper(message):
-# admin_handler.show_admin_stats(bot, message)
 
-# @bot.callback_query_handler(func=lambda call: call.data.startswith('admin_ticket_') and admin_handler.is_admin(call.from_user.id))
-# def admin_ticket_actions_wrapper(call):
-# admin_handler.handle_admin_ticket_callback(bot, call) # Simplified example
+# --- Admin Item Addition Flow ---
+@bot.message_handler(commands=['add'], func=lambda message: admin_handler.is_admin(message.from_user.id))
+def admin_add_item_command_wrapper(message):
+    admin_handler.handle_admin_add_item_command(bot, clear_user_state, get_user_state, update_user_state, message)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('admin_add_') and admin_handler.is_admin(call.from_user.id))
+def admin_add_item_step_callback_wrapper(call):
+    if call.data == 'admin_add_item_cancel':
+        admin_handler.handle_admin_add_item_cancel_callback(bot, clear_user_state, get_user_state, update_user_state, call)
+    elif call.data == 'admin_add_item_execute':
+        admin_handler.handle_admin_add_item_execute(bot, clear_user_state, get_user_state, update_user_state, call)
+    elif call.data == 'admin_add_item_restart': # Added restart option from confirm step
+        # Effectively same as /add command to restart the flow
+        # Simulate a message object for handle_admin_add_item_command
+        mock_message = telebot.types.Message(
+            message_id=call.message.message_id, # Use existing message context if possible
+            from_user=call.from_user,
+            date=call.message.date if call.message else int(time.time()),
+            chat=call.message.chat if call.message else types.Chat(id=call.from_user.id, type='private'), # Ensure chat is valid
+            content_type='text',
+            options={},
+            json_string=""
+        )
+        mock_message.text = "/add" # For logging or potential future use
+        admin_handler.handle_admin_add_item_command(bot, clear_user_state, get_user_state, update_user_state, mock_message)
+        bot.answer_callback_query(call.id, "Restarting item addition.")
+        if call.message: # Attempt to delete the confirmation message
+            try: delete_message(bot, call.message.chat.id, call.message.message_id)
+            except: pass
+    else:
+        # General step progression via callbacks (select city, area, type, size)
+        admin_handler.handle_admin_add_item_step_callback(bot, clear_user_state, get_user_state, update_user_state, call)
+
+# Message handler for text inputs during admin item addition (new city name, price, description etc.)
+@bot.message_handler(
+    func=lambda message: admin_handler.is_admin(message.from_user.id) and \
+                         get_user_state(message.from_user.id, 'admin_add_item_flow') and \
+                         get_user_state(message.from_user.id, 'admin_add_item_flow').get('step') not in ['awaiting_images', 'confirm_add'], # these are handled by photo or callback
+    content_types=['text']
+)
+def admin_add_item_text_input_wrapper(message):
+    # Avoid conflict with /done_images or other commands if they are introduced for text steps
+    if message.text.startswith('/'):
+        # Let other command handlers pick it up if it's not /done_images for the image step
+        # (which is handled by admin_add_item_images_wrapper)
+        return
+    admin_handler.handle_admin_add_item_text_input(bot, clear_user_state, get_user_state, update_user_state, message)
+
+# Message handler for photo uploads or /done_images command during admin item addition
+@bot.message_handler(
+    func=lambda message: admin_handler.is_admin(message.from_user.id) and \
+                         get_user_state(message.from_user.id, 'admin_add_item_flow') and \
+                         get_user_state(message.from_user.id, 'admin_add_item_flow').get('step') == 'awaiting_images',
+    content_types=['photo', 'text'] # Text for /done_images
+)
+def admin_add_item_images_wrapper(message):
+    if message.text and not message.text.lower() == '/done_images':
+        # If it's text but NOT /done_images during image step, send a reminder.
+        # This could be handled inside handle_admin_add_item_images_input too.
+        bot.send_message(message.chat.id, "Please send a photo or type /done_images.")
+        try: delete_message(bot, message.chat.id, message.message_id) # delete the invalid text
+        except: pass
+        return
+    admin_handler.handle_admin_add_item_images_input(bot, clear_user_state, get_user_state, update_user_state, message)
+
+
+# Other Admin handlers (like ticket management) would be registered here too.
+# Example from existing admin_handler (needs to be adapted if they were using @bot decorators before):
+# @bot.message_handler(commands=['tickets'], func=lambda message: admin_handler.is_admin(message.from_user.id))
+# def admin_list_tickets_wrapper(message):
+#     admin_handler.handle_admin_list_tickets_command(bot, clear_user_state, get_user_state, update_user_state, message) # Assuming signature matches
 
 # It's important that admin_handler.py defines its own checking for admin_id for security.
 # For now, we assume admin_handler.py will handle its own decorators or provide functions to be wrapped here if necessary.

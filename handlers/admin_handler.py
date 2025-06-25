@@ -6,10 +6,10 @@ import os
 import logging
 from decimal import Decimal
 
-from bot import bot, get_user_state, update_user_state, clear_user_state
-from modules.auth_utils import is_admin
+# from bot import bot, get_user_state, update_user_state, clear_user_state # Removed
+from modules.auth_utils import is_admin # is_admin will be used in bot.py decorators
 from modules.db_utils import (
-    get_all_open_tickets_admin, get_ticket_details_by_id,
+    get_all_open_tickets_admin, get_ticket_details_by_id, # Assuming these are still needed for ticket system
     add_message_to_ticket, update_ticket_status,
     update_admin_ticket_view_message_id,
     get_or_create_user, get_user_transaction_history
@@ -344,814 +344,333 @@ def handle_admin_close_ticket_callback(call):
         update_user_state(admin_id, 'admin_current_ticket_id', None)
         update_user_state(admin_id, 'admin_flow', None)
 
+# --- Admin Item Addition Flow (Filesystem Based) ---
 
-# --- Admin Item Management ---
-@bot.message_handler(commands=['additem'], func=is_admin)
-def command_add_item_start(message):
+# Placeholder for product_fs_utils, will be imported properly later
+# For now, assume functions like product_fs_utils.get_available_cities() exist.
+from modules import product_fs_utils # Ensure this is created and has the planned functions
+
+def handle_admin_add_item_command(bot_instance, clear_user_state_fn, get_user_state_fn, update_user_state_fn, message):
     admin_id = message.from_user.id
     chat_id = message.chat.id
-    logger.info(f"Admin {admin_id} initiated /additem command.")
-
-    try: delete_message(bot, chat_id, message.message_id)
-    except: pass
-
-    clear_user_state(admin_id)
-    update_user_state(admin_id, 'admin_flow', 'admin_adding_item_city')
-    update_user_state(admin_id, 'add_item_data', {'images': []})
-
-    prompt_msg = bot.send_message(chat_id,
-                     "Okay, let's add a new item type\\.\n"
-                     "🏙️ First, what **city** is this item for?\n"
-                     "Type /cancel\\_admin\\_action to abort at any time\\.",
-                     parse_mode="MarkdownV2",
-                     reply_markup=types.ForceReply(selective=True))
-    update_user_state(admin_id, 'add_item_prompt_msg_id', prompt_msg.message_id)
-
-@bot.message_handler(func=lambda message: get_user_state(message.from_user.id, 'admin_flow') == 'admin_adding_item_city' and is_admin(message), content_types=['text'])
-def process_add_item_city(message):
-    admin_id = message.from_user.id
-    chat_id = message.chat.id
-    city_name = message.text.strip()
-
-    prompt_msg_id = get_user_state(admin_id, 'add_item_prompt_msg_id')
-    if prompt_msg_id:
-        try: delete_message(bot, chat_id, prompt_msg_id)
-        except Exception: pass
-        update_user_state(admin_id, 'add_item_prompt_msg_id', None)
-    try: delete_message(bot, chat_id, message.message_id)
-    except: pass
-
-    if not city_name or len(city_name) > 50 or not all(part.isalnum() or part == '' for part in city_name.split(' ')):
-        new_prompt = bot.send_message(chat_id, "Invalid city name. Please use 1-50 alphanumeric characters (spaces allowed, but not special symbols). Try again:", reply_markup=types.ForceReply(selective=True))
-        update_user_state(admin_id, 'add_item_prompt_msg_id', new_prompt.message_id)
-        return
-
-    add_item_data = get_user_state(admin_id, 'add_item_data', {'images': []})
-    add_item_data['city'] = city_name
-    update_user_state(admin_id, 'add_item_data', add_item_data)
-    update_user_state(admin_id, 'admin_flow', 'admin_adding_item_name')
-
-    new_prompt = bot.send_message(chat_id,
-                     f"👍 City: *{escape_md(city_name)}*\n\n"
-                     "🏷️ Next, what is the **name** of this item type \\(e\\.g\\., `PizzaMargherita`\\)? "
-                     "This will also be used for the folder name, so keep it filesystem\\-friendly \\(alphanumeric, no spaces, underscores allowed\\)\\.",
-                     parse_mode="MarkdownV2",
-                     reply_markup=types.ForceReply(selective=True))
-    update_user_state(admin_id, 'add_item_prompt_msg_id', new_prompt.message_id)
-
-@bot.message_handler(func=lambda message: get_user_state(message.from_user.id, 'admin_flow') == 'admin_adding_item_name' and is_admin(message), content_types=['text'])
-def process_add_item_name(message):
-    admin_id = message.from_user.id
-    chat_id = message.chat.id
-    item_name = message.text.strip()
-
-    prompt_msg_id = get_user_state(admin_id, 'add_item_prompt_msg_id')
-    if prompt_msg_id:
-        try: delete_message(bot, chat_id, prompt_msg_id)
-        except Exception: pass
-        update_user_state(admin_id, 'add_item_prompt_msg_id', None)
-    try: delete_message(bot, chat_id, message.message_id)
-    except: pass
-
-    if not item_name or len(item_name) > 70 or not item_name.replace('_','').isalnum():
-        new_prompt = bot.send_message(chat_id, "Invalid item name. Use 1-70 alphanumeric characters or underscores (no spaces). Try again:", reply_markup=types.ForceReply(selective=True))
-        update_user_state(admin_id, 'add_item_prompt_msg_id', new_prompt.message_id)
-        return
-
-    add_item_data = get_user_state(admin_id, 'add_item_data')
-    potential_path = os.path.join(config.ITEMS_BASE_DIR, add_item_data['city'], item_name)
-    if os.path.exists(potential_path):
-        new_prompt = bot.send_message(chat_id, f"An item type folder named '{escape_md(item_name)}' already exists in '{escape_md(add_item_data['city'])}'. Please choose a different name:", parse_mode="MarkdownV2", reply_markup=types.ForceReply(selective=True))
-        update_user_state(admin_id, 'add_item_prompt_msg_id', new_prompt.message_id)
-        return
-
-    add_item_data['name'] = item_name
-    update_user_state(admin_id, 'add_item_data', add_item_data)
-    update_user_state(admin_id, 'admin_flow', 'admin_adding_item_description')
-
-    new_prompt = bot.send_message(chat_id,
-                     f"🏷️ Item Type Name: *{escape_md(item_name)}*\n\n"
-                     "📝 Now, provide the **description** for this item type\\.",
-                     parse_mode="MarkdownV2",
-                     reply_markup=types.ForceReply(selective=True))
-    update_user_state(admin_id, 'add_item_prompt_msg_id', new_prompt.message_id)
-
-@bot.message_handler(func=lambda message: get_user_state(message.from_user.id, 'admin_flow') == 'admin_adding_item_description' and is_admin(message), content_types=['text'])
-def process_add_item_description(message):
-    admin_id = message.from_user.id
-    chat_id = message.chat.id
-    description = message.text.strip()
-
-    prompt_msg_id = get_user_state(admin_id, 'add_item_prompt_msg_id')
-    if prompt_msg_id:
-        try: delete_message(bot, chat_id, prompt_msg_id)
-        except Exception: pass
-        update_user_state(admin_id, 'add_item_prompt_msg_id', None)
-    try: delete_message(bot, chat_id, message.message_id)
-    except: pass
-
-    if not description or len(description) < 5:
-        new_prompt = bot.send_message(chat_id, "Description too short. Please provide a meaningful description (at least 5 characters).", reply_markup=types.ForceReply(selective=True))
-        update_user_state(admin_id, 'add_item_prompt_msg_id', new_prompt.message_id)
-        return
-
-    add_item_data = get_user_state(admin_id, 'add_item_data')
-    add_item_data['description'] = description
-    update_user_state(admin_id, 'add_item_data', add_item_data)
-    update_user_state(admin_id, 'admin_flow', 'admin_adding_item_price')
-
-    desc_preview = escape_md(description[:100] + ('...' if len(description) > 100 else ''))
-    new_prompt = bot.send_message(chat_id,
-                     f"📝 Description Set: \"_{desc_preview}_\"\n\n"
-                     "💶 What is the **price in EUR** for one unit of this item \\(e\\.g\\., `12.99`\\)?",
-                     parse_mode="MarkdownV2",
-                     reply_markup=types.ForceReply(selective=True))
-    update_user_state(admin_id, 'add_item_prompt_msg_id', new_prompt.message_id)
-
-@bot.message_handler(func=lambda message: get_user_state(message.from_user.id, 'admin_flow') == 'admin_adding_item_price' and is_admin(message), content_types=['text'])
-def process_add_item_price(message):
-    admin_id = message.from_user.id
-    chat_id = message.chat.id
-    price_str = message.text.strip().replace(',', '.')
-
-    prompt_msg_id = get_user_state(admin_id, 'add_item_prompt_msg_id')
-    if prompt_msg_id:
-        try: delete_message(bot, chat_id, prompt_msg_id)
-        except Exception: pass
-        update_user_state(admin_id, 'add_item_prompt_msg_id', None)
-    try: delete_message(bot, chat_id, message.message_id)
-    except: pass
+    logger.info(f"Admin {admin_id} initiated /add command for new FS item.")
 
     try:
-        price = float(price_str)
-        if price < 0:
-            raise ValueError("Price must be non-negative.")
-    except ValueError:
-        new_prompt = bot.send_message(chat_id, "Invalid price format. Please enter a non-negative number (e.g., 12.99 or 0).", reply_markup=types.ForceReply(selective=True))
-        update_user_state(admin_id, 'add_item_prompt_msg_id', new_prompt.message_id)
-        return
+        delete_message(bot_instance, chat_id, message.message_id)
+    except Exception as e_del:
+        logger.warning(f"Could not delete /add command message: {e_del}")
 
-    add_item_data = get_user_state(admin_id, 'add_item_data')
-    add_item_data['price'] = price
-    update_user_state(admin_id, 'add_item_data', add_item_data)
-    update_user_state(admin_id, 'admin_flow', 'admin_adding_item_images')
+    clear_user_state_fn(admin_id) # Clear any previous admin flow
+    update_user_state_fn(admin_id, 'admin_add_item_flow', {'step': 'select_city', 'data': {}})
 
-    new_prompt = bot.send_message(chat_id,
-                     f"💶 Price: *{price:.2f} EUR*\n\n"
-                     "🖼️ Now, send up to 3 **images** for this item type, one by one\\. "
-                     "Send a photo, then wait for confirmation before sending the next\\. "
-                     "When you are done adding images \\(or if you don't want to add any\\), type /doneimages\\.",
-                     parse_mode="MarkdownV2")
-    update_user_state(admin_id, 'add_item_prompt_msg_id', new_prompt.message_id)
-
-@bot.message_handler(
-    func=lambda message: get_user_state(message.from_user.id, 'admin_flow') == 'admin_adding_item_images' and is_admin(message),
-    content_types=['photo', 'text']
-)
-def process_add_item_images_or_done(message):
-    admin_id = message.from_user.id
-    chat_id = message.chat.id
-    add_item_data = get_user_state(admin_id, 'add_item_data')
-
-    prompt_msg_id = get_user_state(admin_id, 'add_item_prompt_msg_id')
-
-    if message.text and message.text.lower() == '/doneimages':
-        if prompt_msg_id:
-            try: delete_message(bot, chat_id, prompt_msg_id)
-            except Exception: pass
-            update_user_state(admin_id, 'add_item_prompt_msg_id', None)
-        try: delete_message(bot, chat_id, message.message_id)
-        except: pass
-        update_user_state(admin_id, 'admin_flow', 'admin_adding_item_confirm')
-        prompt_confirmation_add_item(admin_id, chat_id)
-        return
-
-    if message.photo:
-        if prompt_msg_id:
-            try: delete_message(bot, chat_id, prompt_msg_id)
-            except Exception: pass
-            update_user_state(admin_id, 'add_item_prompt_msg_id', None)
-        try: delete_message(bot, chat_id, message.message_id)
-        except: pass
-
-        if len(add_item_data.get('images', [])) < 3:
-            photo_file = bot.get_file(message.photo[-1].file_id)
-            downloaded_file_bytes = bot.download_file(photo_file.file_path)
-
-            original_filename = f"image_{len(add_item_data.get('images', [])) + 1 }.jpg"
-            if hasattr(photo_file, 'file_path') and photo_file.file_path:
-                 fname_from_path = os.path.basename(photo_file.file_path)
-                 if fname_from_path: original_filename = fname_from_path
-
-            add_item_data.setdefault('images', []).append({'file_bytes': downloaded_file_bytes, 'filename': original_filename})
-            update_user_state(admin_id, 'add_item_data', add_item_data)
-
-            new_prompt_text = f"Image {len(add_item_data['images'])}/3 received. Send another, or type /doneimages."
-            if len(add_item_data['images']) == 3:
-                new_prompt_text = "Maximum 3 images received. Type /doneimages to continue."
-            new_prompt = bot.send_message(chat_id, new_prompt_text)
-            update_user_state(admin_id, 'add_item_prompt_msg_id', new_prompt.message_id)
-        else:
-            new_prompt = bot.send_message(chat_id, "You've already added the maximum of 3 images. Type /doneimages to continue.")
-            update_user_state(admin_id, 'add_item_prompt_msg_id', new_prompt.message_id)
-        return
-
-    if message.text:
-        if prompt_msg_id:
-            try: delete_message(bot, chat_id, prompt_msg_id)
-            except Exception: pass
-            update_user_state(admin_id, 'add_item_prompt_msg_id', None)
-        try: delete_message(bot, chat_id, message.message_id)
-        except: pass
-        new_prompt = bot.send_message(chat_id, "Invalid input. Please send a photo or type /doneimages to finish adding images.")
-        update_user_state(admin_id, 'add_item_prompt_msg_id', new_prompt.message_id)
-
-def prompt_confirmation_add_item(admin_id, chat_id):
-    add_item_data = get_user_state(admin_id, 'add_item_data')
-    if not add_item_data:
-        bot.send_message(chat_id, "Error: Item data missing for confirmation.")
-        clear_user_state(admin_id)
-        return
-
-    summary_text = "*Please confirm item details:*\n\n"
-    summary_text += f"🏙️ City: *{escape_md(add_item_data['city'])}*\n"
-    summary_text += f"🏷️ Name: *{escape_md(add_item_data['name'])}*\n"
-    desc_preview = escape_md(add_item_data['description'][:200] + ('...' if len(add_item_data['description']) > 200 else ''))
-    summary_text += f"📝 Description: \"_{desc_preview}_\"\n"
-    summary_text += f"💶 Price: *{add_item_data['price']:.2f} EUR*\n"
-    summary_text += f"🖼️ Images: *{len(add_item_data.get('images', []))} image(s)*\n\n"
-    summary_text += "Create this item type and its first instance (`instance_01`)?"
-
+    cities = product_fs_utils.get_available_cities()
     markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(types.InlineKeyboardButton("✅ Yes, Create Item", callback_data="admin_confirm_add_item_yes"))
-    markup.add(types.InlineKeyboardButton("❌ No, Cancel", callback_data="admin_confirm_add_item_no"))
+    city_buttons = []
+    for city in cities:
+        city_buttons.append(types.InlineKeyboardButton(f"🏙️ {escape_md(city)}", callback_data=f"admin_add_city_{city}"))
 
-    confirm_msg = bot.send_message(chat_id, summary_text, reply_markup=markup, parse_mode="MarkdownV2")
-    update_user_state(admin_id, 'add_item_confirm_msg_id', confirm_msg.message_id)
+    # Dynamic button creation
+    paired_buttons = [city_buttons[i:i + 2] for i in range(0, len(city_buttons), 2)]
+    for pair in paired_buttons:
+        markup.row(*pair)
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('admin_confirm_add_item_') and is_admin(call))
-def handle_add_item_confirmation_callback(call):
+    markup.add(types.InlineKeyboardButton("➕ Create New City", callback_data="admin_add_city_new"))
+    markup.add(types.InlineKeyboardButton("❌ Cancel", callback_data="admin_add_item_cancel"))
+
+    prompt_text = "🛍️ *Add New Item Instance*\n\nStep 1: Select City or Create New"
+    msg = send_or_edit_message(bot_instance, chat_id, escape_md(prompt_text), reply_markup=markup, parse_mode="MarkdownV2")
+    if msg:
+        update_user_state_fn(admin_id, 'admin_last_prompt_msg_id', msg.message_id)
+
+def handle_admin_add_item_cancel_callback(bot_instance, clear_user_state_fn, get_user_state_fn, update_user_state_fn, call):
     admin_id = call.from_user.id
     chat_id = call.message.chat.id
 
-    confirm_msg_id = get_user_state(admin_id, 'add_item_confirm_msg_id')
-    if confirm_msg_id:
-        try: delete_message(bot, chat_id, confirm_msg_id)
-        except Exception: pass
-        update_user_state(admin_id, 'add_item_confirm_msg_id', None)
-
-    bot.answer_callback_query(call.id)
-
-    if call.data == 'admin_confirm_add_item_yes':
-        add_item_data = get_user_state(admin_id, 'add_item_data')
-        if not add_item_data:
-            bot.send_message(chat_id, "Error: Item data not found. Please start over using /additem.")
-            clear_user_state(admin_id); return
-
-        city = add_item_data['city']
-        name = add_item_data['name']
-        description = add_item_data['description']
-        price = add_item_data['price']
-        images_data = add_item_data.get('images', [])
-        initial_instance_name = "instance_01"
-
-        fs_image_files = [(img_dict['file_bytes'], img_dict['filename']) for img_dict in images_data]
-
-        fs_success, fs_message, product_fs_path = file_system_utils.create_product_type_with_instance(
-            city, name, initial_instance_name, description, fs_image_files
-        )
-
-        if fs_success and product_fs_path:
-            product_id = db_utils.add_product_type(
-                city=city,
-                name=name,
-                price=price,
-                folder_path=product_fs_path,
-                description=description,
-                image_paths_json=json.dumps([img['filename'] for img in images_data]) if images_data else None,
-                initial_quantity=1
-            )
-            if product_id:
-                bot.send_message(chat_id, f"✅ Item type *{escape_md(name)}* in *{escape_md(city)}* added successfully with price {price:.2f} EUR! Product ID: `{product_id}`", parse_mode="MarkdownV2")
-            else:
-                bot.send_message(chat_id, f"⚠️ Item created on filesystem, but failed to add to database: {escape_md(fs_message)}. Please check logs and sync manually if needed.")
-        else:
-            bot.send_message(chat_id, f"⚠️ Error creating item type on filesystem: {escape_md(fs_message)}")
-
-    elif call.data == 'admin_confirm_add_item_no':
-        bot.send_message(chat_id, "Item creation cancelled.")
-
-    clear_user_state(admin_id)
-
-# --- Edit Item Flow ---
-@bot.message_handler(commands=['edititem'], func=is_admin)
-def command_edit_item_list(message, page=0):
-    admin_id = message.from_user.id
-    chat_id = message.chat.id
-    logger.info(f"Admin {admin_id} initiated /edititem, page {page}.")
-
-    if hasattr(message, 'text') and message.text and message.text.startswith('/edititem'):
-        try: delete_message(bot, chat_id, message.message_id)
-        except: pass
-
-    if hasattr(message, 'message') and message.message:
-         current_list_msg_id = get_user_state(admin_id, 'admin_item_list_main_msg_id')
-         if current_list_msg_id and current_list_msg_id == message.message.message_id:
-             pass
-         elif message.message.message_id:
-             try: delete_message(bot, chat_id, message.message.message_id)
-             except: pass
-
-    update_user_state(admin_id, 'admin_flow', 'editing_item_list')
-
-    products = db_utils.get_all_products_admin()
-    if not products:
-        old_list_msg_id = get_user_state(admin_id, 'admin_item_list_main_msg_id')
-        if old_list_msg_id:
-            try: delete_message(bot, chat_id, old_list_msg_id)
-            except:pass
-            update_user_state(admin_id, 'admin_item_list_main_msg_id', None)
-        bot.send_message(chat_id, "No items found in the database to edit.")
-        clear_user_state(admin_id)
-        return
-
-    total_items = len(products)
-    total_pages = (total_items + ITEMS_PER_PAGE_ADMIN - 1) // ITEMS_PER_PAGE_ADMIN
-    page = max(0, min(page, total_pages - 1)) if total_pages > 0 else 0
-
-    start_index = page * ITEMS_PER_PAGE_ADMIN
-    end_index = start_index + ITEMS_PER_PAGE_ADMIN
-    items_to_display = products[start_index:end_index]
-
-    response_text = f"🛠️ *Edit Items (Page {page + 1}/{total_pages if total_pages > 0 else 1})*\nSelect an item to manage:\n\n"
-    if not items_to_display :
-        response_text += "No items on this page." if page > 0 else "No items available."
-
-    item_buttons = []
-    for item in items_to_display:
-        item_id = item['product_id']
-        item_name_escaped = escape_md(item['name'])
-        availability_icon = "✅" if item['is_available'] else "🅾️"
-
-        item_button_text = f"{availability_icon} {item_name_escaped} ({escape_md(item['city'])}) - {item['price']:.2f} EUR"
-        item_buttons.append(types.InlineKeyboardButton(item_button_text, callback_data=f"admin_edit_item_select_{item_id}"))
-
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    for btn in item_buttons: markup.add(btn)
-
-    nav_buttons_row = []
-    if page > 0:
-        nav_buttons_row.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=f"admin_edit_item_page_{page - 1}"))
-    if total_pages > 1 :
-        nav_buttons_row.append(types.InlineKeyboardButton(f"📄 {page+1}/{total_pages}", callback_data=f"admin_edit_item_page_{page}"))
-    if (page + 1) < total_pages:
-        nav_buttons_row.append(types.InlineKeyboardButton("Next ➡️", callback_data=f"admin_edit_item_page_{page + 1}"))
-
-    if nav_buttons_row:
-        markup.row(*nav_buttons_row)
-
-    markup.add(types.InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="admin_main_menu"))
-
-    existing_list_msg_id = get_user_state(admin_id, 'admin_item_list_main_msg_id')
-    sent_list_msg = send_or_edit_message(bot, chat_id, response_text,
-                                         reply_markup=markup,
-                                         existing_message_id=existing_list_msg_id,
-                                         parse_mode="MarkdownV2",
-                                         disable_web_page_preview=True)
-
-    if sent_list_msg:
-        update_user_state(admin_id, 'admin_item_list_main_msg_id', sent_list_msg.message_id)
-    update_user_state(admin_id, 'admin_item_list_current_page', page)
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('admin_edit_item_page_') and is_admin(call))
-def handle_edit_item_page_callback(call):
-    admin_id = call.from_user.id
-    try:
-        page = int(call.data.split('_')[-1])
-    except (IndexError, ValueError):
-        bot.answer_callback_query(call.id, "Invalid page number.", show_alert=True)
-        return
-
-    bot.answer_callback_query(call.id)
-    command_edit_item_list(call, page=page)
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('admin_toggle_item_avail_') and is_admin(call))
-def handle_admin_toggle_availability_callback(call):
-    admin_id = call.from_user.id
-    chat_id = call.message.chat.id
-    try:
-        product_id = int(call.data.split('admin_toggle_item_avail_')[1])
-    except (IndexError, ValueError):
-        bot.answer_callback_query(call.id, "Invalid product ID.", show_alert=True)
-        return
-
-    product = db_utils.get_product_details_by_id(product_id)
-    if not product:
-        bot.answer_callback_query(call.id, "Product not found.", show_alert=True)
-        return
-
-    new_availability = not product['is_available']
-    update_success = db_utils.update_product_availability(product_id, new_availability)
-
-    if update_success:
-        bot.answer_callback_query(call.id, f"Availability updated to: {'Available' if new_availability else 'Unavailable'}")
-
-        if get_user_state(admin_id, 'admin_flow') == 'admin_editing_item_menu' and \
-           get_user_state(admin_id, 'admin_editing_product_id') == product_id:
-
-            edit_menu_msg_id = get_user_state(admin_id, 'admin_edit_item_menu_msg_id')
-            if edit_menu_msg_id:
-                try: delete_message(bot, chat_id, edit_menu_msg_id)
-                except: pass
-
-            mock_call_data = f"admin_edit_item_select_{product_id}"
-            mock_call_obj = types.CallbackQuery(id=f"cb_{datetime.datetime.now().timestamp()}", from_user=call.from_user, data=mock_call_data, chat_instance=call.chat_instance, json_string="", message=None)
-            handle_admin_edit_item_select_callback(mock_call_obj)
-
-        else:
-            current_page = get_user_state(admin_id, 'admin_item_list_current_page', 0)
-            command_edit_item_list(call, page=current_page)
-    else:
-        bot.answer_callback_query(call.id, "Failed to update availability.", show_alert=True)
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('admin_edit_item_select_') and is_admin(call))
-def handle_admin_edit_item_select_callback(call):
-    admin_id = call.from_user.id
-    chat_id = call.message.chat.id
-    try:
-        product_id = int(call.data.split('admin_edit_item_select_')[1])
-    except (IndexError, ValueError):
-        bot.answer_callback_query(call.id, "Invalid product ID.", show_alert=True)
-        return
-
-    product = db_utils.get_product_details_by_id(product_id)
-    if not product:
-        bot.answer_callback_query(call.id, "Product not found.", show_alert=True)
-        return
-
-    update_user_state(admin_id, 'admin_editing_product_id', product_id)
-    update_user_state(admin_id, 'admin_flow', 'admin_editing_item_menu')
-
-    main_list_msg_id = get_user_state(admin_id, 'admin_item_list_main_msg_id')
-    if main_list_msg_id:
-        if call.message and main_list_msg_id == call.message.message_id:
-             try: delete_message(bot, chat_id, main_list_msg_id)
-             except: pass
-        update_user_state(admin_id, 'admin_item_list_main_msg_id', None)
-
-
-    availability_icon = "✅" if product['is_available'] else "🅾️"
-    menu_text = (f"🛠️ Editing Item: *{escape_md(product['name'])}* \\(ID: `{product_id}`\\)\n"
-                 f"City: *{escape_md(product['city'])}*\n"
-                 f"Price: *{product['price']:.2f} EUR*\n"
-                 f"Available: *{'Yes' if product['is_available'] else 'No'}*\n\n"
-                 f"What would you like to edit?")
-
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton("Name 🏷️", callback_data=f"admin_edit_attr_name_{product_id}"),
-        types.InlineKeyboardButton("Price 💶", callback_data=f"admin_edit_attr_price_{product_id}")
-    )
-    markup.add(
-        types.InlineKeyboardButton("City 🏙️", callback_data=f"admin_edit_attr_city_{product_id}"),
-        types.InlineKeyboardButton(f"Toggle Avail. {availability_icon}", callback_data=f"admin_toggle_item_avail_{product_id}")
-    )
-    markup.add(types.InlineKeyboardButton("⬅️ Back to Item List", callback_data="admin_list_items_cmd_from_edit"))
-
-    edit_menu_msg = bot.send_message(chat_id, menu_text, reply_markup=markup, parse_mode="MarkdownV2")
-    update_user_state(admin_id, 'admin_edit_item_menu_msg_id', edit_menu_msg.message_id)
-    if hasattr(call, 'id') and not str(call.id).startswith("mockcall"):
-        bot.answer_callback_query(call.id)
-
-
-@bot.callback_query_handler(func=lambda call: call.data == 'admin_list_items_cmd_from_edit' and is_admin(call))
-def handle_admin_list_items_cmd_from_edit_callback(call):
-    admin_id = call.from_user.id
-    current_page = get_user_state(admin_id, 'admin_item_list_current_page', 0)
-
-    edit_menu_msg_id = get_user_state(admin_id, 'admin_edit_item_menu_msg_id')
-    if edit_menu_msg_id:
-        try: delete_message(bot, call.message.chat.id, edit_menu_msg_id)
-        except: pass
-        update_user_state(admin_id, 'admin_edit_item_menu_msg_id', None)
-
-    mock_message = telebot.types.Message(0,call.from_user,datetime.datetime.now().timestamp(),call.message.chat,'text',{},"")
-    mock_message.text = None
-    command_edit_item_list(mock_message, page=current_page)
-    bot.answer_callback_query(call.id)
-
-# --- Generic Attribute Edit ---
-@bot.callback_query_handler(func=lambda call: call.data.startswith('admin_edit_attr_') and is_admin(call))
-def handle_admin_edit_item_attr_callback(call):
-    admin_id = call.from_user.id
-    chat_id = call.message.chat.id
-
-    try:
-        parts = call.data.split('_')
-        action = parts[3]
-        product_id = int(parts[4])
-    except (IndexError, ValueError):
-        bot.answer_callback_query(call.id, "Invalid edit action.", show_alert=True)
-        return
-
-    product = db_utils.get_product_details_by_id(product_id)
-    if not product:
-        bot.answer_callback_query(call.id, "Product not found.", show_alert=True); return
-
-    update_user_state(admin_id, 'admin_editing_product_id', product_id)
-    update_user_state(admin_id, 'admin_editing_attribute', action)
-    update_user_state(admin_id, 'admin_flow', f'admin_awaiting_edit_{action}')
-
-    current_value_escaped = ""
-    if action == 'name': current_value_escaped = escape_md(product['name'])
-    elif action == 'price': current_value_escaped = f"{product['price']:.2f}"
-    elif action == 'city': current_value_escaped = escape_md(product['city'])
-
-    prompt_text = f"Editing *{escape_md(action.title())}* for item *{escape_md(product['name'])}* \\(ID: `{product_id}`\\)\\.\n"
-    prompt_text += f"Current value: *{current_value_escaped}*\n\n"
-    prompt_text += f"Please enter the new {escape_md(action.lower())}\\. Type /cancel\\_admin\\_action to abort\\."
-
-    edit_menu_msg_id = get_user_state(admin_id, 'admin_edit_item_menu_msg_id')
-    if edit_menu_msg_id:
-        try: delete_message(bot, chat_id, edit_menu_msg_id)
-        except: pass
-        update_user_state(admin_id, 'admin_edit_item_menu_msg_id', None)
-
-    prompt_msg = bot.send_message(chat_id, prompt_text, parse_mode="MarkdownV2", reply_markup=types.ForceReply(selective=True))
-    update_user_state(admin_id, 'admin_edit_item_generic_prompt_id', prompt_msg.message_id)
-    bot.answer_callback_query(call.id)
-
-
-@bot.message_handler(func=lambda msg: str(msg.from_user.id) == str(config.ADMIN_ID) and \
-                                   get_user_state(msg.from_user.id, 'admin_flow', '').startswith('admin_awaiting_edit_'),
-                     content_types=['text'])
-def handle_admin_edit_item_attr_input(message):
-    admin_id = message.from_user.id
-    chat_id = message.chat.id
-    new_value_str = message.text.strip()
-
-    product_id = get_user_state(admin_id, 'admin_editing_product_id')
-    action = get_user_state(admin_id, 'admin_editing_attribute')
-
-    prompt_msg_id = get_user_state(admin_id, 'admin_edit_item_generic_prompt_id')
-    if prompt_msg_id:
-        try: delete_message(bot, chat_id, prompt_msg_id)
-        except: pass
-    try: delete_message(bot, chat_id, message.message_id)
-    except: pass
-
-    if not product_id or not action:
-        bot.send_message(chat_id, "Error: Editing context lost. Please start over.")
-        clear_user_state(admin_id); return
-
-    product_before_edit = db_utils.get_product_details_by_id(product_id)
-    if not product_before_edit:
-        bot.send_message(chat_id, "Error: Product details lost. Please start over.")
-        clear_user_state(admin_id); return
-
-
-    success = False
-    error_message = ""
-
-    if action == 'name':
-        if not new_value_str or len(new_value_str) > 70 or not new_value_str.replace('_','').isalnum():
-            error_message = "Invalid item name. Use 1-70 alphanumeric or underscores (no spaces)."
-        else:
-            success = db_utils.update_product_details(product_id, name=new_value_str)
-    elif action == 'price':
+    last_prompt_msg_id = get_user_state_fn(admin_id, 'admin_last_prompt_msg_id')
+    if last_prompt_msg_id:
         try:
-            new_price = float(new_value_str.replace(',', '.'))
-            if new_price < 0: raise ValueError("Price must be non-negative.")
-            success = db_utils.update_product_details(product_id, price=new_price)
-        except ValueError:
-            error_message = "Invalid price. Must be a non-negative number."
-    elif action == 'city':
-        if not new_value_str or len(new_value_str) > 50 or not all(part.isalnum() or part == '' for part in new_value_str.split(' ')):
-            error_message = "Invalid city name. Use 1-50 alphanumeric (spaces allowed)."
-        else:
-            success = db_utils.update_product_details(product_id, city=new_value_str)
-            if success: bot.send_message(chat_id, "⚠️ *Warning:* City changed in database only. Filesystem folder was NOT moved. Manual sync or FS adjustment may be needed.", parse_mode="MarkdownV2")
+            delete_message(bot_instance, chat_id, last_prompt_msg_id)
+        except Exception as e:
+            logger.warning(f"Failed to delete last prompt message on cancel: {e}")
 
-    if success:
-        bot.send_message(chat_id, f"✅ *{escape_md(action.title())}* for item *{escape_md(product_before_edit['name'])}* \\(ID: `{product_id}`\\) updated to *{escape_md(new_value_str)}*\\.", parse_mode="MarkdownV2")
-    else:
-        bot.send_message(chat_id, f"❌ Error updating {escape_md(action.title())}: {escape_md(error_message) if error_message else 'Database update failed.'}", parse_mode="MarkdownV2")
+    clear_user_state_fn(admin_id)
+    send_or_edit_message(bot_instance, chat_id, "Item addition cancelled.", existing_message_id=call.message.message_id if call.message else None)
+    bot_instance.answer_callback_query(call.id, "Cancelled.")
 
-    update_user_state(admin_id, 'admin_flow', None)
-    update_user_state(admin_id, 'admin_editing_attribute', None)
-    update_user_state(admin_id, 'admin_edit_item_generic_prompt_id', None)
+def _handle_admin_add_item_step(bot_instance, clear_user_state_fn, get_user_state_fn, update_user_state_fn, call_or_message, selected_value=None):
+    # Generic handler for stepping through the add item flow
+    is_call = isinstance(call_or_message, types.CallbackQuery)
+    admin_id = call_or_message.from_user.id
+    chat_id = call_or_message.message.chat.id if is_call else call_or_message.chat.id
 
-    class MockMessageForSelect:
-        def __init__(self, chat, from_user, message_id=0):
-            self.chat = chat
-            self.message_id = message_id
-            self.from_user = from_user
-
-    chat_instance_mock = f"{message.chat.id}_{admin_id}_{datetime.datetime.now().timestamp()}"
-
-
-    mock_call_obj = types.CallbackQuery(
-        id=f"mockcall_reselect_{product_id}_{datetime.datetime.now().timestamp()}",
-        from_user=message.from_user,
-        data=f"admin_edit_item_select_{product_id}",
-        chat_instance=chat_instance_mock,
-        json_string="",
-        message=MockMessageForSelect(message.chat, message.from_user)
-    )
-    handle_admin_edit_item_select_callback(mock_call_obj)
-
-
-# --- Delete Item Flow ---
-@bot.message_handler(commands=['deleteitem'], func=is_admin)
-def command_delete_item_list(message, page=0):
-    admin_id = message.from_user.id
-    chat_id = message.chat.id
-    logger.info(f"Admin {admin_id} initiated /deleteitem, page {page}.")
-
-    if hasattr(message, 'text') and message.text and message.text.startswith('/deleteitem'):
-        try: delete_message(bot, chat_id, message.message_id)
-        except: pass
-
-    if hasattr(message, 'message') and message.message:
-         current_list_msg_id = get_user_state(admin_id, 'admin_delete_item_list_msg_id')
-         if current_list_msg_id and current_list_msg_id == message.message.message_id:
-             pass
-         elif message.message.message_id:
-             try: delete_message(bot, chat_id, message.message.message_id)
-             except: pass
-
-    update_user_state(admin_id, 'admin_flow', 'deleting_item_list')
-
-    products = db_utils.get_all_products_admin()
-    if not products:
-        old_list_msg_id = get_user_state(admin_id, 'admin_delete_item_list_msg_id')
-        if old_list_msg_id:
-            try: delete_message(bot, chat_id, old_list_msg_id)
-            except:pass
-            update_user_state(admin_id, 'admin_delete_item_list_msg_id', None)
-        bot.send_message(chat_id, "No items found to delete.")
-        clear_user_state(admin_id)
+    flow_data = get_user_state_fn(admin_id, 'admin_add_item_flow')
+    if not flow_data:
+        send_or_edit_message(bot_instance, chat_id, "Error: Item addition flow data not found. Please start over with /add.", existing_message_id=call_or_message.message.message_id if is_call else None)
+        if is_call: bot_instance.answer_callback_query(call_or_message.id, "Flow error.")
         return
 
-    total_items = len(products)
-    total_pages = (total_items + ITEMS_PER_PAGE_ADMIN - 1) // ITEMS_PER_PAGE_ADMIN
-    page = max(0, min(page, total_pages - 1)) if total_pages > 0 else 0
+    current_step = flow_data.get('step')
+    item_data = flow_data.get('data', {})
 
-    start_index = page * ITEMS_PER_PAGE_ADMIN
-    end_index = start_index + ITEMS_PER_PAGE_ADMIN
-    items_to_display = products[start_index:end_index]
+    # Delete previous prompt message
+    last_prompt_msg_id = get_user_state_fn(admin_id, 'admin_last_prompt_msg_id')
+    if last_prompt_msg_id:
+        try:
+            delete_message(bot_instance, chat_id, last_prompt_msg_id)
+        except Exception as e:
+            logger.warning(f"Failed to delete previous prompt message: {e}")
+        update_user_state_fn(admin_id, 'admin_last_prompt_msg_id', None)
 
-    response_text = f"🗑️ *Delete Items (Page {page + 1}/{total_pages if total_pages > 0 else 1})*\n"
-    response_text += "Select an item type to delete\\. This action is IRREVERSIBLE and will delete all its instances and data\\.\n\n"
-    if not items_to_display:
-        response_text += "No items on this page." if page > 0 else "No items available."
+    # Delete user's message if it's a text input step
+    if not is_call and hasattr(call_or_message, 'message_id'):
+        try:
+            delete_message(bot_instance, chat_id, call_or_message.message_id)
+        except Exception:
+            pass
 
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    for item in items_to_display:
-        item_id = item['product_id']
-        item_name_escaped = escape_md(item['name'])
-        item_city_escaped = escape_md(item['city'])
-        availability_icon = "✅" if item['is_available'] else "🅾️"
-        item_button_text = f"{availability_icon} {item_name_escaped} ({item_city_escaped}) - {item['price']:.2f} EUR"
-        markup.add(types.InlineKeyboardButton(f"🗑️ {item_button_text}", callback_data=f"admin_delete_item_confirm_{item_id}"))
-
-    nav_buttons_row = []
-    if page > 0:
-        nav_buttons_row.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=f"admin_delete_item_page_{page - 1}"))
-    if total_pages > 1:
-        nav_buttons_row.append(types.InlineKeyboardButton(f"📄 {page+1}/{total_pages}", callback_data=f"admin_delete_item_page_{page}"))
-    if (page + 1) < total_pages:
-        nav_buttons_row.append(types.InlineKeyboardButton("Next ➡️", callback_data=f"admin_delete_item_page_{page + 1}"))
-
-    if nav_buttons_row:
-        markup.row(*nav_buttons_row)
-    markup.add(types.InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="admin_main_menu"))
-
-    existing_list_msg_id = get_user_state(admin_id, 'admin_delete_item_list_msg_id')
-    sent_list_msg = send_or_edit_message(bot, chat_id, response_text,
-                                         reply_markup=markup,
-                                         existing_message_id=existing_list_msg_id,
-                                         parse_mode="MarkdownV2")
-    if sent_list_msg:
-        update_user_state(admin_id, 'admin_delete_item_list_msg_id', sent_list_msg.message_id)
-    update_user_state(admin_id, 'admin_delete_item_current_page', page)
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('admin_delete_item_page_') and is_admin(call))
-def handle_delete_item_page_callback(call):
-    admin_id = call.from_user.id
-    try: page = int(call.data.split('_')[-1])
-    except (IndexError, ValueError):
-        bot.answer_callback_query(call.id, "Invalid page number.", show_alert=True); return
-    bot.answer_callback_query(call.id)
-    command_delete_item_list(call, page=page)
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('admin_delete_item_confirm_') and is_admin(call))
-def handle_admin_delete_item_confirm_callback(call):
-    admin_id = call.from_user.id
-    chat_id = call.message.chat.id
-    try: product_id = int(call.data.split('admin_delete_item_confirm_')[1])
-    except (IndexError, ValueError):
-        bot.answer_callback_query(call.id, "Invalid product ID.", show_alert=True); return
-
-    product = db_utils.get_product_details_by_id(product_id)
-    if not product:
-        bot.answer_callback_query(call.id, "Product not found.", show_alert=True); return
-
-    update_user_state(admin_id, 'admin_deleting_product_id', product_id)
-    update_user_state(admin_id, 'admin_flow', 'admin_confirming_delete_item')
-
-    list_msg_id = get_user_state(admin_id, 'admin_delete_item_list_msg_id')
-    if list_msg_id:
-        try: delete_message(bot, chat_id, list_msg_id)
-        except: pass
-        update_user_state(admin_id, 'admin_delete_item_list_msg_id', None)
-
-    confirm_text = (f"⚠️ *Confirm Deletion*\n\n"
-                    f"Are you sure you want to permanently delete the item type:\n"
-                    f"Name: *{escape_md(product['name'])}*\n"
-                    f"City: *{escape_md(product['city'])}*\n"
-                    f"ID: `{product_id}`\n\n"
-                    f"This will remove all its data, instances, and files from the system\\. This action cannot be undone\\.")
+    next_step_info = {}
     markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton("🗑️ YES, DELETE", callback_data=f"admin_delete_item_do_{product_id}"),
-        types.InlineKeyboardButton("❌ NO, Cancel", callback_data="admin_delete_item_cancel")
+
+    if current_step == 'select_city':
+        if selected_value == "admin_add_city_new":
+            next_step_info = {'step': 'awaiting_new_city_name', 'prompt': "🏙️ Enter new city name:"}
+            markup = types.ForceReply(selective=True) # Expect text input
+        else:
+            item_data['city'] = call_or_message.data.split('admin_add_city_')[1]
+            next_step_info = {'step': 'select_area', 'prompt': f"Selected City: *{escape_md(item_data['city'])}*\n\nStep 2: Select Area or Create New"}
+            areas = product_fs_utils.get_available_areas(item_data['city'])
+            area_buttons = [types.InlineKeyboardButton(f"📍 {escape_md(a)}", callback_data=f"admin_add_area_{a}") for a in areas]
+            paired_buttons = [area_buttons[i:i + 2] for i in range(0, len(area_buttons), 2)]
+            for pair in paired_buttons: markup.row(*pair)
+            markup.add(types.InlineKeyboardButton("➕ Create New Area", callback_data="admin_add_area_new"))
+
+    elif current_step == 'awaiting_new_city_name':
+        item_data['city'] = selected_value # selected_value is the new city name from text
+        # Basic validation for folder name
+        if not selected_value or not selected_value.replace(" ", "").isalnum():
+            next_step_info = {'step': 'awaiting_new_city_name', 'prompt': "Invalid city name. Use alphanumeric characters and spaces only. Enter new city name:"}
+            markup = types.ForceReply(selective=True)
+        else:
+            next_step_info = {'step': 'select_area', 'prompt': f"Created City: *{escape_md(item_data['city'])}*\n\nStep 2: Select Area or Create New"}
+            # Since city is new, there are no existing areas yet
+            markup.add(types.InlineKeyboardButton("➕ Create New Area", callback_data="admin_add_area_new"))
+
+    elif current_step == 'select_area':
+        if selected_value == "admin_add_area_new":
+            next_step_info = {'step': 'awaiting_new_area_name', 'prompt': f"City: *{escape_md(item_data['city'])}*\n\nEnter new area name:"}
+            markup = types.ForceReply(selective=True)
+        else:
+            item_data['area'] = call_or_message.data.split('admin_add_area_')[1]
+            next_step_info = {'step': 'select_item_type', 'prompt': f"City: *{escape_md(item_data['city'])}* / Area: *{escape_md(item_data['area'])}*\n\nStep 3: Select Item Type or Create New"}
+            item_types = product_fs_utils.get_available_item_types(item_data['city'], item_data['area'])
+            type_buttons = [types.InlineKeyboardButton(f"🏷️ {escape_md(it)}", callback_data=f"admin_add_type_{it}") for it in item_types]
+            paired_buttons = [type_buttons[i:i + 2] for i in range(0, len(type_buttons), 2)]
+            for pair in paired_buttons: markup.row(*pair)
+            markup.add(types.InlineKeyboardButton("➕ Create New Item Type", callback_data="admin_add_type_new"))
+
+    elif current_step == 'awaiting_new_area_name':
+        item_data['area'] = selected_value
+        if not selected_value or not selected_value.replace(" ", "").isalnum():
+            next_step_info = {'step': 'awaiting_new_area_name', 'prompt': "Invalid area name. Use alphanumeric characters and spaces only. Enter new area name:"}
+            markup = types.ForceReply(selective=True)
+        else:
+            next_step_info = {'step': 'select_item_type', 'prompt': f"City: *{escape_md(item_data['city'])}* / Created Area: *{escape_md(item_data['area'])}*\n\nStep 3: Select Item Type or Create New"}
+            markup.add(types.InlineKeyboardButton("➕ Create New Item Type", callback_data="admin_add_type_new"))
+
+    elif current_step == 'select_item_type':
+        if selected_value == "admin_add_type_new":
+            next_step_info = {'step': 'awaiting_new_type_name', 'prompt': f"...Area: *{escape_md(item_data['area'])}*\n\nEnter new item type name (e.g., Pizza, Drink):"}
+            markup = types.ForceReply(selective=True)
+        else:
+            item_data['item_type'] = call_or_message.data.split('admin_add_type_')[1]
+            next_step_info = {'step': 'select_size', 'prompt': f"...Item Type: *{escape_md(item_data['item_type'])}*\n\nStep 4: Select Size or Create New"}
+            sizes = product_fs_utils.get_available_sizes(item_data['city'], item_data['area'], item_data['item_type'])
+            size_buttons = [types.InlineKeyboardButton(f"📏 {escape_md(s)}", callback_data=f"admin_add_size_{s}") for s in sizes]
+            paired_buttons = [size_buttons[i:i + 2] for i in range(0, len(size_buttons), 2)]
+            for pair in paired_buttons: markup.row(*pair)
+            markup.add(types.InlineKeyboardButton("➕ Create New Size", callback_data="admin_add_size_new"))
+
+    elif current_step == 'awaiting_new_type_name':
+        item_data['item_type'] = selected_value
+        if not selected_value or not selected_value.replace(" ", "").isalnum(): # Basic validation
+            next_step_info = {'step': 'awaiting_new_type_name', 'prompt': "Invalid type name. Use alphanumeric and spaces. Enter new item type name:"}
+            markup = types.ForceReply(selective=True)
+        else:
+            next_step_info = {'step': 'select_size', 'prompt': f"...Created Item Type: *{escape_md(item_data['item_type'])}*\n\nStep 4: Select Size or Create New"}
+            markup.add(types.InlineKeyboardButton("➕ Create New Size", callback_data="admin_add_size_new"))
+
+    elif current_step == 'select_size':
+        if selected_value == "admin_add_size_new":
+            next_step_info = {'step': 'awaiting_new_size_name', 'prompt': f"...Type: *{escape_md(item_data['item_type'])}*\n\nEnter new size name (e.g., Small, Large, 330ml):"}
+            markup = types.ForceReply(selective=True)
+        else:
+            item_data['size'] = call_or_message.data.split('admin_add_size_')[1]
+            next_step_info = {'step': 'awaiting_price', 'prompt': f"...Size: *{escape_md(item_data['size'])}*\n\nStep 5: Enter Price (EUR, e.g., 10.99)"}
+            markup = types.ForceReply(selective=True)
+
+    elif current_step == 'awaiting_new_size_name':
+        item_data['size'] = selected_value
+        if not selected_value or not selected_value.replace(" ", "").replace(".", "").isalnum(): # Basic validation
+            next_step_info = {'step': 'awaiting_new_size_name', 'prompt': "Invalid size name. Use alphanumeric, spaces, dots. Enter new size name:"}
+            markup = types.ForceReply(selective=True)
+        else:
+            next_step_info = {'step': 'awaiting_price', 'prompt': f"...Created Size: *{escape_md(item_data['size'])}*\n\nStep 5: Enter Price (EUR, e.g., 10.99)"}
+            markup = types.ForceReply(selective=True)
+
+    elif current_step == 'awaiting_price':
+        try:
+            item_data['price'] = float(selected_value.replace(',', '.'))
+            if item_data['price'] < 0: raise ValueError("Price must be non-negative")
+            item_data['images'] = [] # Initialize for image collection
+            next_step_info = {'step': 'awaiting_images', 'prompt': f"Price: *{item_data['price']:.2f} EUR*\n\nStep 6: Send up to 3 images one by one. Type /done_images when finished."}
+            # No ForceReply here, user sends photos or /done_images command
+        except (ValueError, TypeError):
+            next_step_info = {'step': 'awaiting_price', 'prompt': "Invalid price. Please enter a number (e.g., 10.99).\n\nEnter Price:"}
+            markup = types.ForceReply(selective=True)
+
+    elif current_step == 'awaiting_images': # This step is handled by a separate message handler for photos & /done_images
+        # This function shouldn't be directly called for this state via callback, but for text message.
+        # If called by /done_images, selected_value would be that command.
+        if selected_value == "/done_images": # Command from text
+            next_step_info = {'step': 'awaiting_description', 'prompt': f"Images collected: {len(item_data.get('images',[]))}\n\nStep 7: Enter item description."}
+            markup = types.ForceReply(selective=True)
+        else: # Should not happen if logic is correct, means unexpected text was sent.
+             bot_instance.send_message(chat_id, "Please send a photo or type /done_images.")
+             return # Stay in image step, don't update prompt message from here.
+
+    elif current_step == 'awaiting_description':
+        item_data['description'] = selected_value
+        next_step_info = {'step': 'confirm_add', 'prompt': "Final Step: Confirm Details"}
+        # Build confirmation message and buttons
+        summary = (f"City: *{escape_md(item_data['city'])}*\nArea: *{escape_md(item_data['area'])}*\n"
+                   f"Type: *{escape_md(item_data['item_type'])}*\nSize: *{escape_md(item_data['size'])}*\n"
+                   f"Price: *{item_data['price']:.2f} EUR*\nImages: *{len(item_data.get('images',[]))}*\n"
+                   f"Description: _{escape_md(item_data['description'][:100])}{'...' if len(item_data['description'])>100 else ''}_")
+        next_step_info['prompt'] = f"Please review:\n\n{summary}\n\nAdd this item instance?"
+        markup.add(types.InlineKeyboardButton("✅ Yes, Add Item", callback_data="admin_add_item_execute"))
+        markup.add(types.InlineKeyboardButton("✏️ Restart Item Addition", callback_data="admin_add_item_restart")) # Full restart
+
+    else: # Unknown step or end of flow
+        send_or_edit_message(bot_instance, chat_id, "Unknown step in item addition. Please start over with /add.")
+        clear_user_state_fn(admin_id)
+        if is_call: bot_instance.answer_callback_query(call_or_message.id, "Error.")
+        return
+
+    flow_data['step'] = next_step_info['step']
+    flow_data['data'] = item_data
+    update_user_state_fn(admin_id, 'admin_add_item_flow', flow_data)
+
+    if not (next_step_info['step'] == 'awaiting_images' and selected_value != "/done_images"): # Don't send prompt if waiting for image and it wasn't /done
+        # For ForceReply, existing_message_id should be None to send a new message for reply.
+        # For InlineKeyboards, we can edit.
+        existing_id_for_step = call_or_message.message.message_id if is_call and not isinstance(markup, types.ForceReply) else None
+
+        final_prompt_text = escape_md(next_step_info['prompt'])
+        if not isinstance(markup, types.ForceReply): # Add cancel button to inline keyboards
+             markup.add(types.InlineKeyboardButton("❌ Cancel Item Addition", callback_data="admin_add_item_cancel"))
+
+        msg = send_or_edit_message(bot_instance, chat_id, final_prompt_text, reply_markup=markup,
+                                   existing_message_id=existing_id_for_step, parse_mode="MarkdownV2")
+        if msg:
+            update_user_state_fn(admin_id, 'admin_last_prompt_msg_id', msg.message_id)
+
+    if is_call:
+        bot_instance.answer_callback_query(call_or_message.id)
+
+# Callback handlers for each step that uses buttons
+def handle_admin_add_item_step_callback(bot_instance, clear_user_state_fn, get_user_state_fn, update_user_state_fn, call):
+    action = call.data # e.g., admin_add_city_CityA, admin_add_city_new, admin_add_item_execute
+    _handle_admin_add_item_step(bot_instance, clear_user_state_fn, get_user_state_fn, update_user_state_fn, call, selected_value=action)
+
+# Message handlers for steps that expect text input
+def handle_admin_add_item_text_input(bot_instance, clear_user_state_fn, get_user_state_fn, update_user_state_fn, message):
+    text_value = message.text.strip()
+    _handle_admin_add_item_step(bot_instance, clear_user_state_fn, get_user_state_fn, update_user_state_fn, message, selected_value=text_value)
+
+# Specific handler for /done_images command or photo messages
+def handle_admin_add_item_images_input(bot_instance, clear_user_state_fn, get_user_state_fn, update_user_state_fn, message):
+    admin_id = message.from_user.id
+    chat_id = message.chat.id
+    flow_data = get_user_state_fn(admin_id, 'admin_add_item_flow')
+
+    if not flow_data or flow_data.get('step') != 'awaiting_images':
+        # Not in the image step, ignore or handle as unexpected
+        return
+
+    item_data = flow_data.get('data', {})
+    last_prompt_msg_id = get_user_state_fn(admin_id, 'admin_last_prompt_msg_id')
+    if last_prompt_msg_id:
+        try: delete_message(bot_instance, chat_id, last_prompt_msg_id)
+        except Exception: pass
+    try: delete_message(bot_instance, chat_id, message.message_id) # Delete user's photo message or /done_images
+    except Exception: pass
+
+    if message.text and message.text.lower() == '/done_images':
+        _handle_admin_add_item_step(bot_instance, clear_user_state_fn, get_user_state_fn, update_user_state_fn, message, selected_value="/done_images")
+    elif message.photo:
+        if len(item_data.get('images', [])) < 3:
+            photo_file_info = bot_instance.get_file(message.photo[-1].file_id)
+            downloaded_bytes = bot_instance.download_file(photo_file_info.file_path)
+
+            # Try to get original filename if possible, else generate one
+            original_filename = f"image_{len(item_data.get('images', [])) + 1}.jpg" # Default
+            if hasattr(photo_file_info, 'file_path') and photo_file_info.file_path:
+                fname_from_path = os.path.basename(photo_file_info.file_path)
+                if fname_from_path: # Use original extension if present
+                     original_filename = f"image_{len(item_data.get('images', [])) + 1}{os.path.splitext(fname_from_path)[1] or '.jpg'}"
+
+
+            item_data.setdefault('images', []).append({'filename': original_filename, 'bytes': downloaded_bytes})
+            update_user_state_fn(admin_id, 'admin_add_item_flow', flow_data) # data in flow_data is updated
+
+            prompt_text = f"Image {len(item_data['images'])}/3 received. Send another, or type /done_images."
+            if len(item_data['images']) >= 3:
+                prompt_text = "Maximum 3 images received. Type /done_images to continue."
+            msg = bot_instance.send_message(chat_id, prompt_text)
+            update_user_state_fn(admin_id, 'admin_last_prompt_msg_id', msg.message_id)
+        else:
+            msg = bot_instance.send_message(chat_id, "Max 3 images already. Type /done_images.")
+            update_user_state_fn(admin_id, 'admin_last_prompt_msg_id', msg.message_id)
+    else: # Unexpected text other than /done_images
+        msg = bot_instance.send_message(chat_id, "Please send a photo or type /done_images.")
+        update_user_state_fn(admin_id, 'admin_last_prompt_msg_id', msg.message_id)
+
+
+def handle_admin_add_item_execute(bot_instance, clear_user_state_fn, get_user_state_fn, update_user_state_fn, call):
+    admin_id = call.from_user.id
+    chat_id = call.message.chat.id
+    flow_data = get_user_state_fn(admin_id, 'admin_add_item_flow')
+
+    if not flow_data or flow_data.get('step') != 'confirm_add':
+        send_or_edit_message(bot_instance, chat_id, "Error: Confirmation step not found. Please start over.", existing_message_id=call.message.message_id)
+        bot_instance.answer_callback_query(call.id, "Error.")
+        clear_user_state_fn(admin_id)
+        return
+
+    item_data = flow_data['data']
+    images_to_save = [(img_info['filename'], img_info['bytes']) for img_info in item_data.get('images', [])]
+
+    instance_path = product_fs_utils.add_item_instance(
+        city=item_data['city'],
+        area=item_data['area'],
+        item_type=item_data['item_type'],
+        size=item_data['size'],
+        price=item_data['price'],
+        images=images_to_save,
+        description=item_data['description']
     )
-    confirm_msg = bot.send_message(chat_id, confirm_text, reply_markup=markup, parse_mode="MarkdownV2")
-    update_user_state(admin_id, 'admin_delete_item_confirm_msg_id', confirm_msg.message_id)
-    bot.answer_callback_query(call.id)
 
-@bot.callback_query_handler(func=lambda call: call.data == 'admin_delete_item_cancel' and is_admin(call))
-def handle_admin_delete_item_cancel_callback(call):
-    admin_id = call.from_user.id
-    chat_id = call.message.chat.id
-
-    confirm_msg_id = get_user_state(admin_id, 'admin_delete_item_confirm_msg_id')
-    if confirm_msg_id:
-        try: delete_message(bot, chat_id, confirm_msg_id)
-        except: pass
-
-    bot.send_message(chat_id, "Item deletion cancelled.")
-    current_page = get_user_state(admin_id, 'admin_delete_item_current_page', 0)
-    clear_user_state(admin_id)
-    update_user_state(admin_id, 'admin_delete_item_current_page', current_page)
-    bot.answer_callback_query(call.id, "Cancelled.")
-
-    mock_message = telebot.types.Message(0,call.from_user,datetime.datetime.now().timestamp(),call.message.chat,'text',{},"")
-    mock_message.text = None
-    command_delete_item_list(mock_message, page=current_page)
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('admin_delete_item_do_') and is_admin(call))
-def handle_admin_delete_item_do_callback(call):
-    admin_id = call.from_user.id
-    chat_id = call.message.chat.id
-    try: product_id = int(call.data.split('admin_delete_item_do_')[1])
-    except (IndexError, ValueError):
-        bot.answer_callback_query(call.id, "Invalid product ID for deletion.", show_alert=True); return
-
-    stored_product_id = get_user_state(admin_id, 'admin_deleting_product_id')
-    if stored_product_id != product_id:
-        bot.answer_callback_query(call.id, "Confirmation mismatch. Please try again.", show_alert=True)
-        clear_user_state(admin_id); return
-
-    confirm_msg_id = get_user_state(admin_id, 'admin_delete_item_confirm_msg_id')
-    if confirm_msg_id:
-        try: delete_message(bot, chat_id, confirm_msg_id)
-        except: pass
-
-    product = db_utils.get_product_details_by_id(product_id)
-    if not product:
-        bot.send_message(chat_id, "Error: Product to delete not found in database.")
-        clear_user_state(admin_id); bot.answer_callback_query(call.id); return
-
-    folder_path_to_delete = product['folder_path']
-    fs_deleted, fs_msg = file_system_utils.delete_item_folder_by_path(folder_path_to_delete)
-
-    if not fs_deleted:
-        bot.send_message(chat_id, f"⚠️ Filesystem deletion failed for '{escape_md(product['name'])}': {escape_md(fs_msg)}\nDatabase record NOT deleted.", parse_mode="MarkdownV2")
-        clear_user_state(admin_id); bot.answer_callback_query(call.id, "Filesystem error."); return
-
-    db_deleted = db_utils.delete_product_type_db_record(product_id)
-    if db_deleted:
-        bot.send_message(chat_id, f"✅ Item type *{escape_md(product['name'])}* \\(ID: `{product_id}`\\) and its files have been permanently deleted.", parse_mode="MarkdownV2")
+    if instance_path:
+        send_or_edit_message(bot_instance, chat_id, f"✅ Successfully added new item instance to filesystem at: `{escape_md(instance_path)}`", existing_message_id=call.message.message_id, parse_mode="MarkdownV2")
     else:
-        bot.send_message(chat_id, f"⚠️ Item files for *{escape_md(product['name'])}* deleted, but database record removal failed. Please check logs. Product ID: `{product_id}`", parse_mode="MarkdownV2")
+        send_or_edit_message(bot_instance, chat_id, "❌ Error: Failed to save item instance to filesystem. Check logs.", existing_message_id=call.message.message_id)
 
-    current_page = get_user_state(admin_id, 'admin_delete_item_current_page', 0)
-    clear_user_state(admin_id)
-    update_user_state(admin_id, 'admin_delete_item_current_page', current_page)
-    bot.answer_callback_query(call.id)
-
-    mock_message = telebot.types.Message(0,call.from_user,datetime.datetime.now().timestamp(),call.message.chat,'text',{},"")
-    mock_message.text = None
-    command_delete_item_list(mock_message, page=current_page)
+    bot_instance.answer_callback_query(call.id)
+    clear_user_state_fn(admin_id)
 
 
 # --- Admin User Management ---
+# (Keeping user management for now, as it's not directly conflicting with FS item management)
 @bot.message_handler(commands=['viewusers'], func=is_admin)
 def command_view_users(message, page=0):
     admin_id = message.from_user.id
