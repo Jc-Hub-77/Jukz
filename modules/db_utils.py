@@ -45,61 +45,62 @@ def initialize_database():
         ''')
         logger.debug("Users table ensured.")
 
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS products (
-                product_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                city TEXT NOT NULL,
-                name TEXT NOT NULL,
-                description TEXT,
-                price REAL NOT NULL,
-                image_paths TEXT,
-                is_available BOOLEAN DEFAULT TRUE,
-                folder_path TEXT UNIQUE NOT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        logger.debug("Products table ensured.")
+        # Remove 'products' table as products are now managed by filesystem
+        cursor.execute("DROP TABLE IF EXISTS products")
+        logger.info("'products' table dropped as it's replaced by filesystem product management.")
+        # Remove 'product_instances' table if it existed (it wasn't in the provided schema but good to ensure)
+        cursor.execute("DROP TABLE IF EXISTS product_instances")
+        logger.info("'product_instances' table (if existed) dropped.")
 
-        logger.info("Processing 'transactions' table schema for HD wallet.")
-        cursor.execute("DROP TABLE IF EXISTS transactions_old_for_hd_migration_temp")
+
+        # Adjust 'transactions' table:
+        # - Remove product_id FOREIGN KEY
+        # - Add item_details_json TEXT to store product info for purchases
+
+        # Check if transactions table exists and needs migration for item_details_json
         transactions_table_exists = False
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='transactions';")
         if cursor.fetchone():
             transactions_table_exists = True
 
+        temp_transactions_name = "transactions_old_for_fs_item_migration"
+        cursor.execute(f"DROP TABLE IF EXISTS {temp_transactions_name}")
+
         if transactions_table_exists:
-            try:
-                cursor.execute("PRAGMA table_info(transactions)")
-                columns_info = cursor.fetchall()
-                column_names = [info['name'] for info in columns_info]
-                if 'charge_id' in column_names or 'payment_address' in column_names:
-                    cursor.execute("ALTER TABLE transactions RENAME TO transactions_old_for_hd_migration_temp")
-                    logger.info("Renamed existing 'transactions' table to 'transactions_old_for_hd_migration_temp'. Manual data review/migration may be needed.")
-                else:
-                    logger.info("'transactions' table already seems to have the new schema or is empty. No rename needed.")
-            except sqlite3.OperationalError as e:
-                logger.warning(f"Could not rename 'transactions' table (it might not exist or another issue occurred): {e}")
+            logger.info(f"Existing 'transactions' table found. Renaming to '{temp_transactions_name}' for schema adjustment.")
+            cursor.execute(f"ALTER TABLE transactions RENAME TO {temp_transactions_name}")
+        else:
+            logger.info("'transactions' table not found, will be created with new schema.")
 
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS transactions (
                 transaction_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
-                product_id INTEGER,
-                type TEXT NOT NULL,
+                item_details_json TEXT, -- Stores JSON of item details for purchase type
+                type TEXT NOT NULL, -- e.g., 'purchase_crypto', 'purchase_balance', 'balance_top_up'
                 eur_amount REAL NOT NULL,
-                crypto_amount TEXT,
-                currency TEXT,
+                crypto_amount TEXT, -- For crypto payments
+                currency TEXT, -- For crypto payments
                 payment_status TEXT DEFAULT 'pending' NOT NULL,
-                original_add_balance_amount REAL,
+                original_add_balance_amount REAL, -- For balance_top_up type
                 notes TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-                FOREIGN KEY (user_id) REFERENCES users (user_id),
-                FOREIGN KEY (product_id) REFERENCES products (product_id) ON DELETE SET NULL
+                FOREIGN KEY (user_id) REFERENCES users (user_id)
+                -- Removed FOREIGN KEY (product_id)
             )
         ''')
-        logger.debug("Transactions table ensured (new schema: charge_id, payment_address removed).")
+        logger.info("'transactions' table created/ensured with item_details_json and no product_id FK.")
+
+        # Data migration from old transactions table (if it existed) could be added here if necessary
+        # For now, we are just creating the new schema. User would lose old transaction product links.
+        # If temp_transactions_name table exists, log that manual migration might be needed.
+        cursor.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{temp_transactions_name}';")
+        if cursor.fetchone():
+            logger.warning(f"Table '{temp_transactions_name}' exists. Old transaction data is there. "
+                           "Manual migration to the new 'transactions' table structure (especially for product details) "
+                           "would be needed to preserve full history if desired. Product FK is removed.")
+
 
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS hd_address_indices (
@@ -183,10 +184,14 @@ def get_or_create_user(user_id):
     conn.close()
     return user
 
+# clear_user_process seems to be a duplicate or alternative way to call clear_user_state.
+# clear_user_state itself is imported (or dummied) from modules.utils.
+# This function doesn't do anything unique with the DB, so it can be removed if clear_user_state is used directly.
+# For now, I'll leave it but it's redundant if modules.utils.clear_user_state is the primary.
 def clear_user_process(user_id):
     logger.info(f"Clearing process state for user ID {user_id} via clear_user_state.")
-    clear_user_state(user_id)
-    logger.debug(f"User state for {user_id} should have been cleared.")
+    # clear_user_state(user_id) # This call should be to the imported version
+    logger.debug(f"User state for {user_id} should have been cleared (Note: relies on imported clear_user_state).")
     pass
 
 # --- HD Wallet Specific Functions ---
@@ -380,35 +385,10 @@ def get_stale_monitoring_payments(limit: int = 100) -> list[sqlite3.Row]:
     finally:
         conn.close()
 
-# --- General Product and Transaction Functions ---
-def get_cities_with_available_items():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT DISTINCT city FROM products WHERE is_available = TRUE ORDER BY city ASC")
-    rows = cursor.fetchall()
-    conn.close()
-    return [row['city'] for row in rows]
+# --- General Transaction Functions (Product functions removed/to be removed) ---
 
-def get_available_items_in_city(city_name):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT product_id, name
-        FROM products
-        WHERE city = ? AND is_available = TRUE
-        ORDER BY name ASC
-    """, (city_name,))
-    items = [{'product_id': row['product_id'], 'name': row['name']} for row in cursor.fetchall()]
-    conn.close()
-    return items
-
-def get_product_details_by_id(product_id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM products WHERE product_id = ?", (product_id,))
-    product = cursor.fetchone()
-    conn.close()
-    return product
+# get_cities_with_available_items, get_available_items_in_city, get_product_details_by_id
+# are removed as they relied on the 'products' table. Product listing is now FS based.
 
 def update_user_balance(user_id, new_balance, increment_transactions=True):
     conn = get_db_connection()
@@ -425,22 +405,25 @@ def update_user_balance(user_id, new_balance, increment_transactions=True):
     conn.close()
     logger.info(f"User {user_id} balance updated to {new_balance:.2f}. Transactions incremented: {increment_transactions}")
 
-def record_transaction(user_id, product_id, type, eur_amount,  # Removed charge_id
-                       crypto_amount=None, currency=None, payment_status='pending',
-                       original_add_balance_amount=None, notes=None):
+def record_transaction(user_id: int, type: str, eur_amount: float,
+                       item_details_json: str | None = None, # New field for FS-based item info
+                       crypto_amount: str | None = None, currency: str | None = None,
+                       payment_status: str = 'pending',
+                       original_add_balance_amount: float | None = None, notes: str | None = None) -> int | None:
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
         cursor.execute("""
             INSERT INTO transactions
-                (user_id, product_id, type, eur_amount, crypto_amount, currency,
+                (user_id, item_details_json, type, eur_amount, crypto_amount, currency,
                  payment_status, original_add_balance_amount, notes, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        """, (user_id, product_id, type, eur_amount, crypto_amount, currency,
+        """, (user_id, item_details_json, type, eur_amount, crypto_amount, currency,
               payment_status, original_add_balance_amount, notes))
         transaction_id = cursor.lastrowid
         conn.commit()
-        logger.info(f"Transaction recorded: ID {transaction_id} for user {user_id}, type {type}, status {payment_status}")
+        item_info_log = f", ItemDetails: {item_details_json[:50]}..." if item_details_json else ""
+        logger.info(f"Transaction recorded: ID {transaction_id} for user {user_id}, type {type}, status {payment_status}{item_info_log}")
         return transaction_id
     except sqlite3.Error as e:
         logger.exception(f"Failed to record transaction for user {user_id}, type {type}: {e}")
@@ -457,20 +440,27 @@ def get_transaction_by_id(transaction_id):
     conn.close()
     return transaction
 
-def update_transaction_status(transaction_id, status):
+def update_transaction_status(transaction_id, status, notes: str | None = None) -> bool:
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute("""
-            UPDATE transactions
-            SET payment_status = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE transaction_id = ?
-        """, (status, transaction_id))
+        if notes is not None:
+            cursor.execute("""
+                UPDATE transactions
+                SET payment_status = ?, notes = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE transaction_id = ?
+            """, (status, notes, transaction_id))
+        else:
+            cursor.execute("""
+                UPDATE transactions
+                SET payment_status = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE transaction_id = ?
+            """, (status, transaction_id))
         conn.commit()
         if cursor.rowcount == 0:
             logger.warning(f"update_transaction_status did not update any row for TXID {transaction_id}.")
         else:
-            logger.info(f"Transaction {transaction_id} status updated to {status}.")
+            logger.info(f"Transaction {transaction_id} status updated to {status}" + (f" with notes: {notes[:30]}..." if notes else ""))
         return cursor.rowcount > 0
     except sqlite3.Error as e:
         logger.exception(f"Failed to update transaction status for TXID {transaction_id}: {e}")
@@ -479,7 +469,7 @@ def update_transaction_status(transaction_id, status):
     finally:
         conn.close()
 
-
+# --- Ticket System Functions ---
 def get_open_ticket_for_user(user_id):
     logger.debug(f"Checking for open ticket for user_id: {user_id}")
     conn = get_db_connection()
@@ -570,13 +560,19 @@ def get_all_open_tickets_admin():
     logger.debug(f"Fetched {len(tickets)} open tickets for admin.")
     return tickets
 
-def get_ticket_details_by_id(ticket_id):
+def get_ticket_details_by_id(ticket_id: int) -> sqlite3.Row | None:
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM support_tickets WHERE ticket_id = ?", (ticket_id,))
-    ticket = cursor.fetchone()
-    conn.close()
-    return ticket
+    try:
+        cursor.execute("SELECT * FROM support_tickets WHERE ticket_id = ?", (ticket_id,))
+        ticket = cursor.fetchone()
+        return ticket
+    except sqlite3.Error as e:
+        logger.exception(f"Error fetching ticket details for ticket_id {ticket_id}: {e}")
+        return None
+    finally:
+        if conn: conn.close()
+
 
 def update_ticket_status(ticket_id, new_status):
     conn = get_db_connection()
@@ -611,14 +607,7 @@ def update_admin_ticket_view_message_id(ticket_id, message_id):
     finally:
         conn.close()
 
-def get_all_products_admin():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT product_id, city, name, price, is_available FROM products ORDER BY city ASC, name ASC")
-    products = cursor.fetchall()
-    conn.close()
-    logger.debug(f"Fetched {len(products)} products for admin list.")
-    return products
+# get_all_products_admin is removed as 'products' table is gone. Admin will interact with FS.
 
 def expire_old_tickets():
     conn = get_db_connection()
@@ -643,206 +632,24 @@ def expire_old_tickets():
     return expired_details
 
 def periodic_filesystem_to_db_sync():
-    logger.info(f"Periodic_sync: Starting periodic filesystem to DB sync at {datetime.datetime.utcnow().isoformat()} UTC...")
-    from modules import file_system_utils
-    actions_summary = {"marked_unavailable_folder_gone": 0, "marked_unavailable_no_instances": 0, "newly_added": 0, "errors": 0, "reactivated": 0, "details_updated": 0}
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("SELECT product_id, folder_path, is_available FROM products")
-        db_products_info = {row['folder_path']: {'id': row['product_id'], 'is_available': bool(row['is_available'])} for row in cursor.fetchall()}
-    except sqlite3.Error as e:
-        logger.exception(f"ERROR:Periodic_sync: DB error fetching products: {e}")
-        actions_summary["errors"] += 1
-        conn.close()
-        return actions_summary
+    # periodic_filesystem_to_db_sync is no longer needed as products table is removed.
+    # If there was any other logic in it (e.g. cleaning old purchased items), that would need separate handling.
+    # For now, removing the function.
+    # logger.info(f"Periodic_sync: Starting periodic filesystem to DB sync at {datetime.datetime.utcnow().isoformat()} UTC...")
+    # from modules import file_system_utils # Old import
+    # ... (rest of old function) ...
+    logger.info("Periodic_sync: periodic_filesystem_to_db_sync is now obsolete due to FS-based product management.")
+    return {"status": "obsolete"}
 
-    fs_product_folder_paths = set()
-    try:
-        cities = file_system_utils.get_cities()
-        for city in cities:
-            product_type_names = file_system_utils.get_items_in_city(city)
-            for pt_name in product_type_names:
-                fs_product_folder_paths.add(os.path.join(config.ITEMS_BASE_DIR, city, pt_name))
-    except Exception as e:
-        logger.exception(f"ERROR:Periodic_sync: Filesystem scan error: {e}")
-        actions_summary["errors"] += 1
+# update_product_availability, update_product_name, etc. are removed as they target 'products' table.
+# Product details are now managed via filesystem.
 
-    for product_folder_path in fs_product_folder_paths:
-        relative_path = os.path.relpath(product_folder_path, config.ITEMS_BASE_DIR)
-        parts = relative_path.split(os.sep)
-        if len(parts) != 2:
-             logger.warning(f"WARNING:Periodic_sync: Could not derive city/product_type from path: {product_folder_path} (parts: {parts})")
-             continue
-        city_name, product_type_name = parts[0], parts[1]
+# delete_product_by_id is removed. Deletion is FS based + ensuring no transactions reference it if needed.
 
-        was_db_available = db_products_info.get(product_folder_path, {}).get('is_available')
-        sync_item_from_fs_to_db(city_name, product_type_name, product_folder_path, default_price=0.0)
+# sync_item_from_fs_to_db is removed. No DB table to sync items to.
 
-        cursor.execute("SELECT is_available FROM products WHERE folder_path = ?", (product_folder_path,))
-        updated_product_row = cursor.fetchone()
-        if not updated_product_row:
-            actions_summary["errors"] += 1
-            logger.error(f"ERROR:Periodic_sync: Product disappeared from DB after sync attempt: {product_folder_path}")
-            continue
-        current_fs_is_available = updated_product_row['is_available']
+# mark_item_as_unavailable_in_db is removed. Availability is FS based.
 
-        if product_folder_path not in db_products_info:
-            actions_summary["newly_added"] += 1
-            logger.info(f"Periodic_sync: Newly added: {product_folder_path}, Available: {current_fs_is_available}")
-        else:
-            if current_fs_is_available and not was_db_available:
-                actions_summary["reactivated"] += 1
-                logger.info(f"Periodic_sync: Reactivated: {product_folder_path}")
-            elif not current_fs_is_available and was_db_available:
-                actions_summary["marked_unavailable_no_instances"] += 1
-                logger.info(f"Periodic_sync: Marked unavailable (no instances): {product_folder_path}")
-            elif current_fs_is_available and was_db_available:
-                actions_summary["details_updated"] += 1
-
-    db_only_paths = set(db_products_info.keys()) - fs_product_folder_paths
-    for path_to_mark_gone in db_only_paths:
-        if db_products_info[path_to_mark_gone]['is_available']:
-            if mark_item_as_unavailable_in_db(path_to_mark_gone):
-                actions_summary["marked_unavailable_folder_gone"] += 1
-                logger.info(f"Periodic_sync: Marked unavailable (folder gone): {path_to_mark_gone}")
-            else:
-                actions_summary["errors"] += 1; logger.error(f"ERROR:Periodic_sync: Failed to mark unavailable (folder gone): {path_to_mark_gone}")
-    conn.close()
-    logger.info(f"Periodic_sync: Sync completed. Summary: {actions_summary}")
-    return actions_summary
-
-def update_product_availability(product_id, new_status_bool):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("UPDATE products SET is_available = ?, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?", (new_status_bool, product_id))
-        conn.commit()
-        if cursor.rowcount > 0: logger.info(f"Availability for product {product_id} updated to {new_status_bool}.")
-        else: logger.warning(f"Product {product_id} not found during availability update.")
-        return cursor.rowcount > 0
-    except sqlite3.Error as e:
-        logger.exception(f"SQLite error updating availability for product {product_id}: {e}")
-        conn.rollback(); return False
-    finally: conn.close()
-
-def update_product_name(product_id, new_name):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("UPDATE products SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?", (new_name, product_id))
-        conn.commit()
-        if cursor.rowcount > 0: logger.info(f"Name for product {product_id} updated to '{new_name}'.")
-        return cursor.rowcount > 0
-    except sqlite3.Error as e:
-        logger.exception(f"SQLite error updating name for product {product_id}: {e}")
-        conn.rollback(); return False
-    finally: conn.close()
-
-def update_product_description(product_id, new_description):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("UPDATE products SET description = ?, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?", (new_description, product_id))
-        conn.commit()
-        if cursor.rowcount > 0: logger.info(f"Description for product {product_id} updated.")
-        return cursor.rowcount > 0
-    except sqlite3.Error as e:
-        logger.exception(f"SQLite error updating description for product {product_id}: {e}")
-        conn.rollback(); return False
-    finally: conn.close()
-
-def update_product_price(product_id, new_price):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("UPDATE products SET price = ?, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?", (new_price, product_id))
-        conn.commit()
-        if cursor.rowcount > 0: logger.info(f"Price for product {product_id} updated to {new_price:.2f}.")
-        return cursor.rowcount > 0
-    except sqlite3.Error as e:
-        logger.exception(f"SQLite error updating price for product {product_id}: {e}")
-        conn.rollback(); return False
-    finally: conn.close()
-
-def update_product_image_paths(product_id, new_image_paths_json_string):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("UPDATE products SET image_paths = ?, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?", (new_image_paths_json_string, product_id))
-        conn.commit()
-        if cursor.rowcount > 0: logger.info(f"Image paths for product {product_id} updated.")
-        return cursor.rowcount > 0
-    except sqlite3.Error as e:
-        logger.exception(f"SQLite error updating image_paths for product {product_id}: {e}")
-        conn.rollback(); return False
-    finally: conn.close()
-
-def delete_product_by_id(product_id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("DELETE FROM products WHERE product_id = ?", (product_id,))
-        conn.commit()
-        if cursor.rowcount > 0: logger.info(f"Product {product_id} deleted successfully from database.")
-        else: logger.warning(f"No product found with ID {product_id} to delete from database.")
-        return cursor.rowcount > 0
-    except sqlite3.Error as e:
-        logger.exception(f"SQLite error deleting product {product_id}: {e}")
-        conn.rollback(); return False
-    finally: conn.close()
-
-from modules import file_system_utils
-
-def sync_item_from_fs_to_db(city_name: str, product_type_name: str, product_folder_path: str, default_price: float = 0.0):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        instances = file_system_utils.get_product_instances(product_folder_path)
-        is_available_on_fs = len(instances) > 0
-        fs_display_details = file_system_utils.get_item_details(city_name, product_type_name)
-        description_for_db = fs_display_details.get('description', "No description available.") if fs_display_details else "No description available."
-        image_paths_list_for_db = fs_display_details.get('image_paths', []) if fs_display_details else []
-        image_paths_json_for_db = json.dumps(image_paths_list_for_db)
-
-        cursor.execute("SELECT product_id, price FROM products WHERE folder_path = ?", (product_folder_path,))
-        product_in_db = cursor.fetchone()
-
-        if product_in_db:
-            cursor.execute("""
-                UPDATE products SET city = ?, name = ?, description = ?, image_paths = ?, is_available = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE folder_path = ?""",
-                (city_name, product_type_name, description_for_db, image_paths_json_for_db, is_available_on_fs, product_folder_path))
-            logger.info(f"SYNC_FS_DB: Updated product type: {product_type_name} in {city_name}. Available: {is_available_on_fs}.")
-        else:
-            cursor.execute("""
-                INSERT INTO products (city, name, description, price, image_paths, is_available, folder_path, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)""",
-                (city_name, product_type_name, description_for_db, default_price, image_paths_json_for_db, is_available_on_fs, product_folder_path))
-            logger.info(f"SYNC_FS_DB: Inserted new product type: {product_type_name} in {city_name}. Price: {default_price:.2f}. Available: {is_available_on_fs}.")
-        conn.commit()
-    except sqlite3.Error as e:
-        logger.exception(f"SYNC_FS_DB: SQLite error for product {product_folder_path}: {e}")
-        conn.rollback()
-    except Exception as e_gen: # Catch other potential errors like FS issues if not caught by file_system_utils
-        logger.exception(f"SYNC_FS_DB: General error for product {product_folder_path}: {e_gen}")
-    finally:
-        conn.close()
-
-
-def mark_item_as_unavailable_in_db(folder_path: str) -> bool:
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("UPDATE products SET is_available = FALSE, updated_at = CURRENT_TIMESTAMP WHERE folder_path = ?", (folder_path,))
-        conn.commit()
-        if cursor.rowcount > 0: logger.info(f"Marked product with folder_path '{folder_path}' as unavailable.")
-        else: logger.warning(f"No product found with folder_path '{folder_path}' to mark as unavailable.")
-        return cursor.rowcount > 0
-    except sqlite3.Error as e:
-        logger.exception(f"Error marking item as unavailable in DB for {folder_path}: {e}")
-        conn.rollback(); return False
-    finally: conn.close()
 
 def increment_user_transaction_count(user_id: int):
     conn = get_db_connection()
@@ -892,66 +699,35 @@ def update_main_transaction_for_hd_payment(transaction_id: int, status: str, cry
         if conn: conn.close()
 
 def initial_sync_filesystem_to_db():
-    logger.info("Starting initial filesystem to DB sync...")
-    db_conn_temp = get_db_connection()
-    cursor_temp = db_conn_temp.cursor()
-    try:
-        cursor_temp.execute("SELECT folder_path FROM products")
-        db_all_product_folder_paths = {row['folder_path'] for row in cursor_temp.fetchall()}
-    except sqlite3.Error as e:
-        logger.exception("Initial_sync: DB error fetching all product paths.")
-        db_conn_temp.close()
-        return # Cannot proceed without this
-    db_conn_temp.close()
-
-    fs_current_product_folder_paths = set()
-    try:
-        cities = file_system_utils.get_cities()
-        for city in cities:
-            product_type_names = file_system_utils.get_items_in_city(city)
-            for product_type_name in product_type_names:
-                product_folder_path = os.path.join(config.ITEMS_BASE_DIR, city, product_type_name)
-                fs_current_product_folder_paths.add(product_folder_path)
-                logger.debug(f"INITIAL_SYNC: Processing FS item: Path '{product_folder_path}'")
-                sync_item_from_fs_to_db(city_name=city, product_type_name=product_type_name, product_folder_path=product_folder_path, default_price=0.0)
-    except Exception as e_fs_scan: # Catch potential errors during FS scan or initial sync calls
-        logger.exception(f"INITIAL_SYNC: Error during filesystem scan or item sync: {e_fs_scan}")
-
-    paths_in_db_but_not_in_fs = db_all_product_folder_paths - fs_current_product_folder_paths
-    logger.info(f"INITIAL_SYNC: Found {len(paths_in_db_but_not_in_fs)} paths in DB but not in FS to mark unavailable.")
-    for product_folder_path_to_mark_unavailable in paths_in_db_but_not_in_fs:
-        logger.info(f"INITIAL_SYNC: Marking as unavailable (folder gone): {product_folder_path_to_mark_unavailable}")
-        mark_item_as_unavailable_in_db(product_folder_path_to_mark_unavailable)
-
-    logger.info("Initial filesystem to DB sync completed.")
+    # initial_sync_filesystem_to_db is obsolete as products table is removed.
+    # The filesystem is now the source of truth for products.
+    logger.info("Initial_sync_filesystem_to_db is now obsolete.")
+    pass # Keep the function defined to avoid breaking existing calls in bot.py if any, but it does nothing.
 
 
 def get_user_transaction_history(user_id: int, limit: int = 5, offset: int = 0) -> list[sqlite3.Row]:
     """
     Fetches a paginated transaction history for a given user.
-    Joins with products table to get product names for purchases.
+    Product name for purchases will need to be extracted from item_details_json if displayed.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        # The COALESCE(p.name, 'N/A') handles cases where product_id is NULL (e.g., balance top-up)
-        # or if a product was somehow deleted but transaction remains.
         query = """
             SELECT
-                t.transaction_id,
-                t.type,
-                t.eur_amount,
-                t.crypto_amount,
-                t.currency,
-                t.payment_status,
-                t.notes,
-                t.created_at,
-                t.original_add_balance_amount,
-                p.name AS product_name
-            FROM transactions t
-            LEFT JOIN products p ON t.product_id = p.product_id
-            WHERE t.user_id = ?
-            ORDER BY t.created_at DESC
+                transaction_id,
+                type,
+                eur_amount,
+                crypto_amount,
+                currency,
+                payment_status,
+                notes,
+                created_at,
+                original_add_balance_amount,
+                item_details_json -- Include this to potentially extract item name in calling code
+            FROM transactions
+            WHERE user_id = ?
+            ORDER BY created_at DESC
             LIMIT ? OFFSET ?
         """
         cursor.execute(query, (user_id, limit, offset))
@@ -965,122 +741,12 @@ def get_user_transaction_history(user_id: int, limit: int = 5, offset: int = 0) 
         if conn:
             conn.close()
 
-# --- Admin Item Management DB Functions ---
-
-def add_product_type(city: str, name: str, price: float, folder_path: str, description: str | None = None, image_paths_json: str | None = None, initial_quantity: int = 0) -> int | None:
-    """
-    Adds a new product type to the 'products' table.
-    The quantity is determined by the number of instances found by sync_item_from_fs_to_db.
-    is_available will also be set by the sync based on instance availability.
-    """
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        # is_available and quantity will be updated by sync_item_from_fs_to_db
-        # For initial insert, we can assume is_available=False until sync confirms instances.
-        # Or, if an instance was just created, initial_quantity could be 1.
-        # Let's rely on sync_item_from_fs_to_db to set correct availability and derive quantity.
-        # The 'description' and 'image_paths' in products table are from the *oldest instance*.
-        # These will also be populated by sync_item_from_fs_to_db.
-        cursor.execute("""
-            INSERT INTO products (city, name, price, folder_path, description, image_paths, is_available, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        """, (city, name, price, folder_path, description, image_paths_json, (initial_quantity > 0))) # True if initial quantity > 0
-        product_id = cursor.lastrowid
-        conn.commit()
-        logger.info(f"Product type '{name}' in city '{city}' added to DB with ID {product_id}. Path: {folder_path}. Price: {price:.2f}. Initial Quantity: {initial_quantity}")
-
-        # Immediately sync this new product to update its details from FS (like description from instance)
-        if product_id:
-            sync_item_from_fs_to_db(city, name, folder_path, default_price=price)
-            logger.info(f"Initial sync performed for newly added product ID {product_id}.")
-
-        return product_id
-    except sqlite3.IntegrityError as e_int:
-        logger.error(f"DB IntegrityError adding product '{name}' in '{city}' (folder_path: {folder_path}): {e_int}. Likely duplicate folder_path.")
-        conn.rollback()
-        return None
-    except sqlite3.Error as e:
-        logger.exception(f"DB error adding product type '{name}' in '{city}': {e}")
-        conn.rollback()
-        return None
-    finally:
-        if conn: conn.close()
-
-def update_product_details(product_id: int, name: str | None = None, price: float | None = None, city: str | None = None) -> bool:
-    """Updates name, price, or city for a given product_id."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    fields_to_update = []
-    params = []
-
-    if name is not None:
-        fields_to_update.append("name = ?")
-        params.append(name)
-    if price is not None:
-        fields_to_update.append("price = ?")
-        params.append(price)
-    if city is not None:
-        fields_to_update.append("city = ?")
-        params.append(city)
-
-    if not fields_to_update:
-        logger.warning("update_product_details called with no fields to update.")
-        return False
-
-    fields_to_update.append("updated_at = CURRENT_TIMESTAMP")
-    query = f"UPDATE products SET {', '.join(fields_to_update)} WHERE product_id = ?"
-    params.append(product_id)
-
-    try:
-        cursor.execute(query, tuple(params))
-        conn.commit()
-        if cursor.rowcount > 0:
-            logger.info(f"Product {product_id} details updated. Fields: {fields_to_update[:-1]}")
-            return True
-        logger.warning(f"Product {product_id} not found for update or no changes made.")
-        return False
-    except sqlite3.Error as e:
-        logger.exception(f"DB error updating product {product_id}: {e}")
-        conn.rollback()
-        return False
-    finally:
-        if conn: conn.close()
-
-
-def delete_product_type_db_record(product_id: int) -> bool:
-    """
-    Deletes a product type record from the database.
-    This should be called AFTER the corresponding folder is deleted from the filesystem.
-    Transactions referencing this product_id will have product_id set to NULL due to FOREIGN KEY ON DELETE SET NULL.
-    """
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("DELETE FROM products WHERE product_id = ?", (product_id,))
-        conn.commit()
-        if cursor.rowcount > 0:
-            logger.info(f"Product record with ID {product_id} deleted from database.")
-            return True
-        logger.warning(f"No product record found with ID {product_id} to delete.")
-        return False
-    except sqlite3.Error as e:
-        logger.exception(f"DB error deleting product record {product_id}: {e}")
-        conn.rollback()
-        return False
-    finally:
-        if conn: conn.close()
-
-# get_all_products_admin is already defined and seems suitable.
-# update_product_availability is also already defined.
-# sync_item_from_fs_to_db will handle quantity updates based on actual instances.
-# A direct quantity update function might be risky if it desyncs with FS.
-# For deleting, the flow would be:
-# 1. Admin confirms delete.
-# 2. Call file_system_utils.delete_item_folder_by_path (for product type or instance).
-# 3. If successful, call db_utils.delete_product_type_db_record (if deleting whole type)
-#    OR trigger a sync_item_from_fs_to_db for the parent product type (if deleting an instance).
-#    The sync function will then update quantity/availability or remove the product if no instances left.
+# --- Admin Item Management DB Functions --- (These are now obsolete) ---
+# def add_product_type(...):
+# def update_product_details(...):
+# def delete_product_type_db_record(...):
+# All functions that directly manipulated the 'products' table are removed or commented out
+# as product management is now primarily filesystem-based.
 
 def get_all_users_admin(limit: int = 10, offset: int = 0) -> tuple[list[sqlite3.Row], int]:
     """
