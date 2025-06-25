@@ -49,21 +49,35 @@ if not validate_seed_phrase():
 else:
     logger.info("HD Wallet seed phrase validated successfully.")
 
-# Import handlers (keeping imports even if not directly used by decorators here)
+# Import handlers
 logger.info("Importing handlers...")
-from handlers import account_handler, buy_flow_handler, support_handler, admin_handler
 from handlers.main_menu_handler import handle_start, handle_back_to_main_menu_callback
+from handlers.buy_flow_handler import (
+    handle_buy_initiate_callback, handle_city_selection_callback,
+    handle_item_selection_callback, handle_pay_buy_crypto_callback,
+    handle_buy_check_payment_callback, handle_cancel_buy_payment_callback
+)
 from handlers.add_balance_handler import (
     handle_add_balance_callback, handle_amount_input_for_add_balance,
     handle_pay_balance_crypto_callback, handle_check_add_balance_payment_callback,
     handle_cancel_add_balance_payment_callback
 )
+from handlers.account_handler import (
+    handle_account_callback, handle_view_full_history_callback # Will be created in account_handler.py
+)
+from handlers.support_handler import (
+    handle_support_initiate_callback, handle_support_message,
+    handle_user_close_ticket_callback
+)
+# admin_handler is also imported but its handlers are typically for admin commands, not main user flow.
+from handlers import admin_handler
+
 logger.info("Handlers imported.")
 
 # Register handlers after bot instance is created
 logger.info("Registering handlers...")
 
-# Main Menu Handlers
+# --- Main Menu and Navigation ---
 @bot.message_handler(commands=['start'])
 def start_command_wrapper(message):
     handle_start(bot, clear_user_state, get_user_state, update_user_state, message)
@@ -72,33 +86,104 @@ def start_command_wrapper(message):
 def back_to_main_callback_wrapper(call):
     handle_back_to_main_menu_callback(bot, clear_user_state, get_user_state, update_user_state, call)
 
-# Other Main Menu Button Handlers (placeholders - need to confirm actual handler functions)
-# Assuming handlers exist in respective imported modules and accept (bot, ..., call)
+# --- Buy Flow Handlers ---
 @bot.callback_query_handler(func=lambda call: call.data == 'buy_initiate')
 def buy_initiate_callback_wrapper(call):
-    # Need to find the actual handler function in handlers.buy_flow_handler
-    # For now, a placeholder or a simple response
-    logger.info(f"Buy initiate callback received from user {call.from_user.id}")
-    bot.answer_callback_query(call.id, "Buy button clicked (handler not fully implemented yet)")
-    # Example: handlers.buy_flow_handler.handle_buy_initiate(bot, ..., call)
+    buy_flow_handler.handle_buy_initiate_callback(bot, clear_user_state, get_user_state, update_user_state, call)
 
+@bot.callback_query_handler(func=lambda call: call.data.startswith('select_city_'))
+def city_selection_callback_wrapper(call):
+    buy_flow_handler.handle_city_selection_callback(bot, clear_user_state, get_user_state, update_user_state, call)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('select_item_'))
+def item_selection_callback_wrapper(call):
+    buy_flow_handler.handle_item_selection_callback(bot, clear_user_state, get_user_state, update_user_state, call)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('pay_buy_'))
+def pay_buy_crypto_callback_wrapper(call):
+    buy_flow_handler.handle_pay_buy_crypto_callback(bot, clear_user_state, get_user_state, update_user_state, call)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('check_buy_payment_'))
+def check_buy_payment_callback_wrapper(call):
+    buy_flow_handler.handle_buy_check_payment_callback(bot, clear_user_state, get_user_state, update_user_state, call)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('cancel_buy_payment_'))
+def cancel_buy_payment_callback_wrapper(call):
+    buy_flow_handler.handle_cancel_buy_payment_callback(bot, clear_user_state, get_user_state, update_user_state, call)
+
+
+# --- Add Balance Flow Handlers ---
 @bot.callback_query_handler(func=lambda call: call.data == 'main_add_balance')
 def add_balance_callback_wrapper(call):
     handle_add_balance_callback(bot, clear_user_state, get_user_state, update_user_state, call)
 
+@bot.message_handler(func=lambda message: get_user_state(message.from_user.id, 'current_flow') == 'add_balance_awaiting_amount', content_types=['text'])
+def amount_input_for_add_balance_wrapper(message):
+    handle_amount_input_for_add_balance(bot, clear_user_state, get_user_state, update_user_state, message)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('pay_balance_'))
+def pay_balance_crypto_callback_wrapper(call):
+    handle_pay_balance_crypto_callback(bot, clear_user_state, get_user_state, update_user_state, call)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('check_bal_payment_'))
+def check_add_balance_payment_callback_wrapper(call):
+    handle_check_add_balance_payment_callback(bot, clear_user_state, get_user_state, update_user_state, call)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('cancel_bal_payment_'))
+def cancel_add_balance_payment_callback_wrapper(call):
+    handle_cancel_add_balance_payment_callback(bot, clear_user_state, get_user_state, update_user_state, call)
+
+
+# --- Account Flow Handlers ---
 @bot.callback_query_handler(func=lambda call: call.data == 'main_account')
 def account_callback_wrapper(call):
-    # Need to find the actual handler function in handlers.account_handler
-    logger.info(f"Account callback received from user {call.from_user.id}")
-    bot.answer_callback_query(call.id, "Account button clicked (handler not fully implemented yet)")
-    # Example: handlers.account_handler.handle_account(bot, ..., call)
+    # This will call the function to be implemented in account_handler.py
+    account_handler.handle_account_callback(bot, clear_user_state, get_user_state, update_user_state, call)
 
+@bot.callback_query_handler(func=lambda call: call.data.startswith('view_tx_history_page_'))
+def view_full_history_callback_wrapper(call):
+    # This will call the function to be implemented in account_handler.py
+    account_handler.handle_view_full_history_callback(bot, clear_user_state, get_user_state, update_user_state, call)
+
+
+# --- Support Flow Handlers ---
 @bot.callback_query_handler(func=lambda call: call.data == 'support_initiate')
-def support_callback_wrapper(call):
-    # Need to find the actual handler function in handlers.support_handler
-    logger.info(f"Support initiate callback received from user {call.from_user.id}")
-    bot.answer_callback_query(call.id, "Support button clicked (handler not fully implemented yet)")
-    # Example: handlers.support_handler.handle_support_initiate(bot, ..., call)
+def support_initiate_callback_wrapper(call):
+    support_handler.handle_support_initiate_callback(bot, clear_user_state, get_user_state, update_user_state, call)
+
+@bot.message_handler(
+    func=lambda message: (
+        get_user_state(message.from_user.id, 'current_flow') == 'support_info_displayed' or
+        (get_user_state(message.from_user.id, 'current_flow') and
+         get_user_state(message.from_user.id, 'current_flow').startswith('in_support_ticket_')) or
+        (
+            get_user_state(message.from_user.id, 'current_ticket_id') is not None and
+            db_utils.get_ticket_details_by_id(get_user_state(message.from_user.id, 'current_ticket_id'))['status'] == 'open' # Ensure direct DB check for active ticket
+        )
+    ) and message.chat.type == 'private' and not (message.text and message.text.startswith('/')), # Ensure it's not a command
+    content_types=['text', 'photo']
+)
+def support_message_wrapper(message):
+    support_handler.handle_support_message(bot, clear_user_state, get_user_state, update_user_state, message)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('user_close_ticket_'))
+def user_close_ticket_callback_wrapper(call):
+    support_handler.handle_user_close_ticket_callback(bot, clear_user_state, get_user_state, update_user_state, call)
+
+# --- Admin Handlers ---
+# These are typically command-based or specific callback data for admin actions
+# Example:
+# @bot.message_handler(commands=['admin_stats'], func=lambda message: admin_handler.is_admin(message.from_user.id))
+# def admin_stats_wrapper(message):
+# admin_handler.show_admin_stats(bot, message)
+
+# @bot.callback_query_handler(func=lambda call: call.data.startswith('admin_ticket_') and admin_handler.is_admin(call.from_user.id))
+# def admin_ticket_actions_wrapper(call):
+# admin_handler.handle_admin_ticket_callback(bot, call) # Simplified example
+
+# It's important that admin_handler.py defines its own checking for admin_id for security.
+# For now, we assume admin_handler.py will handle its own decorators or provide functions to be wrapped here if necessary.
+# This part might need more specific registrations based on admin_handler.py's structure.
 
 
 # Custom update listener to log all incoming updates
